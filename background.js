@@ -184,32 +184,69 @@ async function cropImage(imageDataUrl, region, dpr) {
   }
 }
 
-// ---- Wait for tab to complete loading ----
+// ---- Wait for tab to complete loading (improved) ----
 function waitForTabComplete(tabId, timeout = 8000) {
   return new Promise((resolve, reject) => {
-    let timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('waitForTabComplete timeout'));
-    }, timeout);
+    let resolved = false;
     
-    function listener(updatedId, changeInfo) {
-      if (updatedId === tabId && changeInfo.status === 'complete') {
+    const cleanup = (timer, listener) => {
+      if (!resolved) {
+        resolved = true;
         clearTimeout(timer);
         chrome.tabs.onUpdated.removeListener(listener);
-        // Small extra wait for scripts to run
+      }
+    };
+    
+    let timer = setTimeout(() => {
+      cleanup(timer, listener);
+      
+      // Instead of rejecting, check if tab is in a usable state
+      chrome.tabs.get(tabId, (tab) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(`Tab ${tabId} not found: ${chrome.runtime.lastError.message}`));
+          return;
+        }
+        
+        if (tab && (tab.status === 'complete' || tab.status === 'loading')) {
+          console.log(`[WAIT] ⚠️ Timeout but tab status is "${tab.status}", proceeding anyway...`);
+          setTimeout(() => resolve(true), 800);
+        } else {
+          reject(new Error(`waitForTabComplete timeout after ${timeout}ms, tab status: ${tab?.status || 'unknown'}`));
+        }
+      });
+    }, timeout);
+    
+    function listener(updatedId, changeInfo, tab) {
+      if (updatedId !== tabId) return;
+      
+      // Accept both 'complete' and stable 'loading' state
+      if (changeInfo.status === 'complete') {
+        console.log(`[WAIT] ✅ Tab ${tabId} status: complete`);
+        cleanup(timer, listener);
+        // Extra wait for scripts and content to initialize
         setTimeout(() => resolve(true), 600);
+      } else if (changeInfo.status === 'loading' && tab.url && !tab.url.startsWith('chrome://')) {
+        // Valid loading state (not chrome:// page)
+        console.log(`[WAIT] 📄 Tab ${tabId} loading: ${tab.url.substring(0, 50)}...`);
       }
     }
     
     chrome.tabs.onUpdated.addListener(listener);
     
-    // Check initial state
+    // Check initial state immediately
     chrome.tabs.get(tabId, (tab) => {
-      if (chrome.runtime.lastError) return;
+      if (chrome.runtime.lastError) {
+        cleanup(timer, listener);
+        reject(new Error(`Tab ${tabId} not found: ${chrome.runtime.lastError.message}`));
+        return;
+      }
+      
       if (tab?.status === 'complete') {
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(listener);
+        console.log(`[WAIT] ✅ Tab ${tabId} already complete`);
+        cleanup(timer, listener);
         setTimeout(() => resolve(true), 600);
+      } else {
+        console.log(`[WAIT] ⏳ Waiting for tab ${tabId} (current status: ${tab?.status || 'unknown'})...`);
       }
     });
   });
@@ -295,12 +332,40 @@ async function runJobForTab(tabId) {
       await sleep(FOCUS_SWITCH_DELAY);
       console.log(`[JOB] ✅ Tab ${tabId} is now active and focused`);
       
-      // Reload tab
-      console.log(`[JOB] 🔄 Reloading tab ${tabId}...`);
-      await chrome.tabs.reload(tabId, { bypassCache: true });
+      // Check if we should reload (skip reload if this is a retry and tab is already loaded)
+      let shouldReload = true;
+      if (attempt > 0) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (tab.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+            console.log(`[JOB] ℹ️ Tab already loaded on retry ${attempt + 1}, skipping reload`);
+            shouldReload = false;
+          }
+        } catch (e) {
+          console.warn('[JOB] Could not check tab status:', e.message);
+        }
+      }
       
-      // Wait for tab to complete
-      await waitForTabComplete(tabId, 4000 + attempt * 1500);
+      // Reload tab (if needed)
+      if (shouldReload) {
+        console.log(`[JOB] 🔄 Reloading tab ${tabId}...`);
+        await chrome.tabs.reload(tabId, { bypassCache: attempt === 0 }); // Only bypass cache on first attempt
+      } else {
+        console.log(`[JOB] ⏭️ Skipping reload on retry attempt ${attempt + 1}`);
+      }
+      
+      // Wait for tab to complete with progressive timeout
+      const waitTimeout = 6000 + (attempt * 3000); // 6s, 9s, 12s
+      console.log(`[JOB] ⏳ Waiting for tab to load (timeout: ${waitTimeout}ms)...`);
+      
+      try {
+        await waitForTabComplete(tabId, waitTimeout);
+      } catch (waitErr) {
+        console.warn(`[JOB] ⚠️ Wait error: ${waitErr.message}`);
+        // Don't fail immediately, try to continue
+        console.log(`[JOB] ℹ️ Attempting to continue anyway after ${attempt > 0 ? 'extra' : 'normal'} delay...`);
+        await sleep(2000 + attempt * 1000);
+      }
       
       // Verify content script is ready
       try {
@@ -399,6 +464,8 @@ async function runJobForTab(tabId) {
       
     } catch (err) {
       console.error(`[JOB] ❌ Attempt ${attempt + 1} failed for tab ${tabId}:`, err.message);
+      console.error(`[JOB] ❌ Attempt ${attempt + 1} failed for tab ${tabId}:`, err.message);
+
       console.error(`[JOB] ❌ Stack:`, err.stack);
       
       // Show error badge
