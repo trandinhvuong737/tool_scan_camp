@@ -655,10 +655,34 @@ async function inlineScrapeFunction() {
         const key = cell.getAttribute('essfield') || 
                     cell.getAttribute('data-field') || 
                     cell.getAttribute('field');
-        let text = cell.getAttribute('aria-label') || 
-                   (cell.querySelector('aw-header-cell')?.innerText) || 
-                   cell.innerText;
-        text = text ? text.trim().replace(/\s+/g, ' ') : '';
+        
+        // Get text from aria-label first (most reliable)
+        let text = cell.getAttribute('aria-label');
+        
+        // Fallback to innerText but clean it
+        if (!text) {
+          const headerCellElement = cell.querySelector('aw-header-cell');
+          if (headerCellElement) {
+            // Clone and remove icon elements before getting text
+            const clone = headerCellElement.cloneNode(true);
+            
+            // Remove Material Icons (i, mat-icon, etc.)
+            const icons = clone.querySelectorAll('i, mat-icon, .material-icons, [class*="icon"]');
+            icons.forEach(icon => icon.remove());
+            
+            text = clone.innerText || clone.textContent;
+          } else {
+            text = cell.innerText || cell.textContent;
+          }
+        }
+        
+        // Clean text: trim, remove extra spaces, remove icon text like "expand_more"
+        if (text) {
+          text = text.trim()
+                     .replace(/\s+/g, ' ')
+                     .replace(/expand_more|expand_less|arrow_drop_down|arrow_drop_up/gi, '')
+                     .trim();
+        }
         
         if (key && text) {
           headers.push(text);
@@ -687,7 +711,18 @@ async function inlineScrapeFunction() {
       const map = {};
       row.querySelectorAll('ess-cell[role="gridcell"]').forEach(cell => {
         const k = cell.getAttribute('essfield');
-        if (k) map[k] = cell.innerText.trim().replace(/\s+/g, ' ');
+        if (k) {
+          // Get cell text and clean it
+          let cellText = cell.innerText || cell.textContent || '';
+          
+          // Remove common icon texts
+          cellText = cellText.trim()
+                             .replace(/\s+/g, ' ')
+                             .replace(/expand_more|expand_less|arrow_drop_down|arrow_drop_up|check|close|edit|delete|more_vert/gi, '')
+                             .trim();
+          
+          map[k] = cellText;
+        }
       });
       
       const out = headers.map(h => {
