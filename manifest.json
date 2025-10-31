@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Công cụ Chụp ảnh & Xuất Excel",
+  "version": "1.0",
+  "description": "Chụp ảnh tab hiện tại và xuất dữ liệu bảng sang Excel.",
+  "permissions": [
+    "offscreen",
+    "tabCapture",
+    "storage",
+    "scripting",
+    "tabs",
+    "activeTab",
+    "alarms"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_helper.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+  {
+    "resources": ["offscreen.html"],
+    "matches": ["<all_urls>"]
+  }],
+  "host_permissions": [
+    "https://api.telegram.org/"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "images/scanner.png",
+      "48": "images/scanner.png",
+      "128": "images/scanner.png"
+    }
+  },
+  "icons": {
+    "16": "images/scanner.png",
+    "48": "images/scanner.png",
+    "128": "images/scanner.png"
+  }
+}

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Công cụ Tab</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      width: 250px;
+      padding: 10px;
+      text-align: center;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      color: white;
+    }
+    #selectAreaBtn {
+      background-color: #f4b400; /* Màu Google Yellow */
+    }
+    #clearAreaBtn {
+      background-color: #ea4335; /* Màu Google Red */
+      font-size: 12px;
+      padding: 6px;
+      margin-top: 5px;
+    }
+    #screenshotBtn {
+      background-color: #4285F4; /* Màu Google Blue */
+    }
+    #excelBtn {
+      background-color: #0F9D58; /* Màu Google Green */
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .telegram-section {
+      margin-top: 15px;
+      text-align: left;
+    }
+    .telegram-section input {
+      width: calc(100% - 10px);
+      padding: 5px;
+      margin-top: 5px;
+    }
+    .telegram-section label {
+      font-size: 12px;
+    }
+    #saveTelegramBtn {
+        background-color: #6c757d;
+    }
+    #sendTelegramBtn {
+        background-color: #0088cc; /* Telegram Blue */
+        font-weight: bold;
+    }
+    #sendTelegramBtn.running {
+        background-color: #dc3545; /* Red for stop */
+    }
+    .auto-section {
+        margin-top: 10px;
+        text-align: left;
+    }
+    .auto-section input {
+        width: 60px;
+    }
+    .region-info {
+        background-color: #f0f0f0;
+        padding: 8px;
+        margin: 5px 0;
+        border-radius: 4px;
+        font-size: 11px;
+        text-align: left;
+    }
+    .region-info strong {
+        color: #0F9D58;
+    }
+    .countdown {
+        background-color: #e3f2fd;
+        padding: 6px;
+        margin: 5px 0;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        color: #1976d2;
+    }
+  </style>
+</head>
+<body>
+  <h3>Công cụ Tab</h3>
+  
+  <button id="selectAreaBtn">✂️ Chọn Vùng Chụp</button>
+  <div id="regionInfo" style="display:none;" class="region-info">
+    <strong>✓ Đã chọn vùng:</strong><br>
+    <span id="regionText"></span>
+  </div>
+  <button id="clearAreaBtn" style="display:none;">🗑️ Xóa vùng đã chọn</button>
+
+  <hr style="border: 0; border-top: 1px solid #ddd; margin-top: 15px;">
+
+  <div class="telegram-section">
+      <label for="botToken">Bot Token (Dùng chung):</label>
+      <input type="password" id="botToken" placeholder="Nhập Bot Token của bạn">
+      <label for="chatId">Chat ID (Riêng cho tab này):</label>
+      <input type="text" id="chatId" placeholder="Nhập Chat ID">
+      <button id="saveTelegramBtn">💾 Lưu</button>
+  </div>
+
+  <hr style="border: 0; border-top: 1px solid #ddd; margin-top: 15px;">
+
+  <div class="auto-section">
+      <label for="interval">Gửi mỗi (phút):</label>
+      <input type="number" id="interval" min="1" value="10">
+      
+      <label for="pageLoadTimeout" style="margin-top: 8px; display: block;">Timeout tải trang (ms):</label>
+      <input type="number" id="pageLoadTimeout" min="1000" value="3000" style="width: 100px;">
+  </div>
+
+  <div id="countdown" class="countdown" style="display:none;"></div>
+
+  <button id="sendTelegramBtn">🚀 Bắt đầu Auto</button>
+
+  <script src="xlsx.full.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
