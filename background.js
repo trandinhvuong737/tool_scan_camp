@@ -600,15 +600,42 @@ async function inlineScrapeFunction() {
     console.warn('[SCRAPE] ⚠️ Failed waiting for progress:', e.message);
   }
   
-  // Step 3: Wait for table to appear and scroll to it - with retry
+  // Step 3: Wait for table to appear and scroll to BOTTOM - with retry
   try {
     await retry(async () => {
       const canvas = await waitForElement('.ess-table-canvas', 5000);
       if (!canvas) throw new Error('Table canvas not found');
       
-      canvas.scrollIntoView({ behavior: 'auto', block: 'center' });
-      await delay(500);
-      console.log('[SCRAPE] ✅ Scrolled to table');
+      // Scroll to table first
+      canvas.scrollIntoView({ behavior: 'auto', block: 'start' });
+      await delay(300);
+      
+      // Find the scrollable container (canvas itself or parent)
+      const scrollContainer = canvas.scrollHeight > canvas.clientHeight ? canvas : 
+                             (canvas.parentElement?.scrollHeight > canvas.parentElement?.clientHeight ? canvas.parentElement : null);
+      
+      if (scrollContainer) {
+        console.log('[SCRAPE] 📜 Scrolling to bottom of table to load all rows...');
+        
+        // Scroll to bottom to trigger lazy loading
+        const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+        scrollContainer.scrollTop = maxScrollTop;
+        await delay(800); // Wait for lazy load
+        
+        // Scroll down a bit more to ensure all loaded
+        scrollContainer.scrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+        await delay(500);
+        
+        console.log(`[SCRAPE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
+      } else {
+        // If no scrollable container, try window scroll
+        console.log('[SCRAPE] 📜 Scrolling window to bottom of table...');
+        const tableBottom = canvas.getBoundingClientRect().bottom + window.pageYOffset;
+        window.scrollTo({ top: tableBottom, behavior: 'auto' });
+        await delay(800);
+        console.log('[SCRAPE] ✅ Scrolled window to table bottom');
+      }
+      
     }, 2, 800);
   } catch (e) {
     console.warn('[SCRAPE] ⚠️ Failed to scroll:', e.message);
