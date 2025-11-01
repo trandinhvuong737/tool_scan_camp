@@ -142,13 +142,40 @@ async function captureTab(tabId) {
     console.log(`[CAPTURE] ✅ Success via focus fallback`);
   }
   
-  // Crop if region is set
+  // Load region from storage (critical for service worker persistence)
+  let region = null;
+  let dpr = 1;
+  
+  // Check memory first (fast)
   if (CAPTURE_REGIONS.has(tabId)) {
-    const { region, dpr } = CAPTURE_REGIONS.get(tabId);
-    if (region && region.width > 0 && region.height > 0) {
-      console.log(`[CAPTURE] 🔲 Cropping to region: ${region.width}x${region.height}`);
-      imageDataUrl = await cropImage(imageDataUrl, region, dpr);
+    const cached = CAPTURE_REGIONS.get(tabId);
+    region = cached.region;
+    dpr = cached.dpr || 1;
+    console.log(`[CAPTURE] 📍 Using cached region from memory`);
+  } else {
+    // Load from storage (service worker may have restarted)
+    console.log(`[CAPTURE] 📍 Loading region from storage (service worker may have restarted)...`);
+    try {
+      const { tabSettings } = await chrome.storage.local.get('tabSettings');
+      if (tabSettings && tabSettings[tabId] && tabSettings[tabId].captureRegion) {
+        region = tabSettings[tabId].captureRegion;
+        dpr = tabSettings[tabId].dpr || 1;
+        
+        // Restore to memory cache
+        CAPTURE_REGIONS.set(tabId, { region, dpr });
+        console.log(`[CAPTURE] ✅ Loaded region from storage: ${region.width}x${region.height}`);
+      }
+    } catch (err) {
+      console.warn(`[CAPTURE] ⚠️ Failed to load region from storage:`, err);
     }
+  }
+  
+  // Crop if region is set
+  if (region && region.width > 0 && region.height > 0) {
+    console.log(`[CAPTURE] 🔲 Cropping to region: ${region.width}x${region.height} (dpr: ${dpr})`);
+    imageDataUrl = await cropImage(imageDataUrl, region, dpr);
+  } else {
+    console.log(`[CAPTURE] ℹ️ No region set, using full screenshot`);
   }
   
   return imageDataUrl;
