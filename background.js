@@ -391,16 +391,18 @@ async function runJobForTab(tabId) {
       }
       
       // Wait for tab to complete with progressive timeout
-      const waitTimeout = 6000 + (attempt * 3000); // 6s, 9s, 12s
+      // Increased timeout for slow networks: 15s, 25s, 40s
+      const waitTimeout = 15000 + (attempt * 10000);
       console.log(`[JOB] ⏳ Waiting for tab to load (timeout: ${waitTimeout}ms)...`);
       
       try {
         await waitForTabComplete(tabId, waitTimeout);
+        console.log(`[JOB] ✅ Tab loaded successfully`);
       } catch (waitErr) {
         console.warn(`[JOB] ⚠️ Wait error: ${waitErr.message}`);
-        // Don't fail immediately, try to continue
-        console.log(`[JOB] ℹ️ Attempting to continue anyway after ${attempt > 0 ? 'extra' : 'normal'} delay...`);
-        await sleep(2000 + attempt * 1000);
+        // Don't fail immediately, try to continue with extra delay
+        console.log(`[JOB] ℹ️ Adding extra delay for slow network...`);
+        await sleep(5000 + attempt * 3000); // 5s, 8s, 11s extra wait
       }
       
       // Verify content script is ready
@@ -424,8 +426,16 @@ async function runJobForTab(tabId) {
             args: [startDate, endDate]
           });
           console.log(`[JOB] ✅ Date range applied successfully`);
+          
+          // CRITICAL: Wait extra time for data to load after applying filter
+          // This is essential for slow networks
+          console.log(`[JOB] ⏳ Waiting for data to load after filter (5s)...`);
+          await sleep(5000);
+          console.log(`[JOB] ✅ Data should be loaded now`);
         } catch (err) {
           console.warn('[JOB] ⚠️ Failed to apply date range:', err.message);
+          // If filter fails, still wait a bit for page to settle
+          await sleep(2000);
         }
       } else {
         console.log(`[JOB] ℹ️ No date range configured, skipping date filter`);
@@ -547,18 +557,18 @@ async function applyDateRangeFunction(startDateStr, endDateStr) {
   // Helper functions - must be self-contained
   const delay = ms => new Promise(r => setTimeout(r, ms));
   
-  async function waitForSelector(selector, timeout = 5000) {
+  async function waitForSelector(selector, timeout = 10000) { // Increased from 5000 for slow networks
     const start = Date.now();
     while (Date.now() - start < timeout) {
       const el = document.querySelector(selector);
       if (el) return el;
-      await delay(200);
+      await delay(300); // Increased from 200
     }
     return null;
   }
   
   // MutationObserver-based wait for element (handles dynamic content)
-  async function waitForElement(selector, timeout = 8000) {
+  async function waitForElement(selector, timeout = 15000) { // Increased from 8000 for slow networks
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(selector);
       if (existing) {
@@ -675,29 +685,43 @@ async function applyDateRangeFunction(startDateStr, endDateStr) {
     await retry(async () => {
       const progSel = 'material-progress,[role="progressbar"]';
       let seen = false;
+      let noProgressCounter = 0;
       const t0 = Date.now();
       
-      while (Date.now() - t0 < 12000) {
+      // Maximum 15s wait, but can exit early if no progress bar detected
+      while (Date.now() - t0 < 10000) {
         const p = document.querySelector(progSel);
         if (p) {
           seen = true;
+          noProgressCounter = 0; // Reset counter when we see progress
           await delay(200);
           continue;
         }
+        
+        // If progress was shown and now hidden, data is loaded
         if (seen) {
           console.log('[DATE] ✅ Data loaded (progress indicator hidden)');
-          return; // Progress was shown and now hidden - data loaded
+          await delay(500); // Brief wait to ensure data is rendered
+          return;
         }
+        
+        // If we never see progress bar after 3 seconds, assume it's already loaded
+        noProgressCounter++;
+        if (noProgressCounter > 15) { // 15 × 200ms = 3 seconds
+          console.log('[DATE] ℹ️ No progress indicator found after 3s, assuming data ready');
+          return;
+        }
+        
         await delay(200);
       }
       
-      // If we never saw progress bar, table might already be loaded
+      // Timeout after 15s - but don't fail, just proceed
       if (!seen) {
-        console.log('[DATE] ℹ️ No progress indicator found, assuming data ready');
+        console.log('[DATE] ⚠️ Progress timeout, proceeding anyway...');
         return;
       }
       
-      throw new Error('Data loading timeout');
+      throw new Error('Data loading timeout after 15s');
     }, 2, 1000);
   } catch (e) {
     console.warn('[DATE] ⚠️ Failed waiting for progress:', e.message);
@@ -754,18 +778,18 @@ async function downloadGoogleSheetFunction(fileName = 'Report') {
   // Helper functions - must be self-contained
   const delay = ms => new Promise(r => setTimeout(r, ms));
   
-  async function waitForSelector(selector, timeout = 5000) {
+  async function waitForSelector(selector, timeout = 10000) { // Increased from 5000
     const start = Date.now();
     while (Date.now() - start < timeout) {
       const el = document.querySelector(selector);
       if (el) return el;
-      await delay(200);
+      await delay(300); // Increased from 200
     }
     return null;
   }
   
   // MutationObserver-based wait for element (handles dynamic content)
-  async function waitForElement(selector, timeout = 8000) {
+  async function waitForElement(selector, timeout = 15000) { // Increased from 8000
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(selector);
       if (existing) {
@@ -794,7 +818,7 @@ async function downloadGoogleSheetFunction(fileName = 'Report') {
   }
   
   // Retry wrapper for operations
-  async function retry(fn, retries = 3, delayMs = 1000) {
+  async function retry(fn, retries = 3, delayMs = 2000) { // Increased from 1000
     for (let i = 0; i < retries; i++) {
       try {
         return await fn();
@@ -843,26 +867,26 @@ async function downloadGoogleSheetFunction(fileName = 'Report') {
       
       console.log('[DOWNLOAD] 🔽 Clicking download button...');
       downloadBtn.click();
-      await delay(800); // Wait for popup menu to appear
+      await delay(1200); // Increased from 800 for slow networks
       console.log('[DOWNLOAD] ✅ Download menu opened');
-    }, 3, 1000);
+    }, 3, 2000); // Increased from 1000
     
     // Step 2: Wait for menu popup and click "Google Trang tính" option
     await retry(async () => {
-      // Wait for the menu to appear
-      const googleSheetOption = await waitForElement('material-select-item[aria-label="Google Trang tính"]', 5000);
+      // Wait for the menu to appear - increased timeout
+      const googleSheetOption = await waitForElement('material-select-item[aria-label="Google Trang tính"]', 10000); // Increased from 5000
       if (!googleSheetOption) throw new Error('Google Sheets option not found in menu');
       
       console.log('[DOWNLOAD] 📊 Clicking "Google Trang tính" option...');
       googleSheetOption.click();
-      await delay(1000); // Wait for dialog to appear
+      await delay(1500); // Increased from 1000 for dialog to appear
       console.log('[DOWNLOAD] ✅ Google Sheets option selected');
-    }, 3, 1000);
+    }, 3, 2000); // Increased from 1000
     
     // Step 3: Wait for dialog and fill in file name
     await retry(async () => {
-      // Wait for the dialog to appear
-      const dialog = await waitForElement('material-dialog.basic-dialog', 5000);
+      // Wait for the dialog to appear - increased timeout
+      const dialog = await waitForElement('material-dialog.basic-dialog', 10000); // Increased from 5000
       if (!dialog) throw new Error('Download dialog not found');
       
       console.log('[DOWNLOAD] 📝 Dialog appeared, looking for file name input...');
@@ -877,9 +901,9 @@ async function downloadGoogleSheetFunction(fileName = 'Report') {
       
       // Clear existing value and set new file name
       fileNameInput.focus();
-      await delay(200);
+      await delay(300); // Increased from 200
       fileNameInput.value = '';
-      await delay(100);
+      await delay(150); // Increased from 100
       fileNameInput.value = fileName;
       fileNameInput.dispatchEvent(new Event('input', { bubbles: true }));
       fileNameInput.dispatchEvent(new Event('change', { bubbles: true }));
