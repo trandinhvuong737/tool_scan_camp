@@ -11,8 +11,30 @@ const DEFAULT_PAGE_LOAD_TIMEOUT = 3000;
 const tabQueues = new Map(); // tabId → Promise (queue tail)
 const CAPTURE_REGIONS = new Map(); // tabId → { region, dpr }
 
+// Global capture lock to prevent multiple tabs from capturing at the same time
+let captureQueue = Promise.resolve(); // Global queue for screenshot captures
+
 // ---- Utility ----
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Enqueue screenshot capture to prevent conflicts when multiple tabs capture simultaneously
+function enqueueCaptureJob(tabId, captureFn) {
+  console.log(`[CAPTURE-QUEUE] Tab ${tabId} entering capture queue...`);
+  const prev = captureQueue;
+  const next = prev.then(async () => {
+    console.log(`[CAPTURE-QUEUE] Tab ${tabId} starting capture (lock acquired)`);
+    try {
+      return await captureFn();
+    } finally {
+      console.log(`[CAPTURE-QUEUE] Tab ${tabId} finished capture (lock released)`);
+    }
+  }).catch(err => {
+    console.error(`[CAPTURE-QUEUE] Capture failed for tab ${tabId}:`, err);
+    throw err; // Re-throw to propagate error
+  });
+  captureQueue = next;
+  return next;
+}
 
 // Simple helper to enqueue job per tab
 function enqueueTabJob(tabId, jobFn) {
@@ -278,36 +300,27 @@ function waitForTabComplete(tabId, timeout = 8000) {
     });
   });
 }
-async function sendToTelegram(botToken, chatId, imageDataUrl, excelBlob = null, retries = 3) {
+async function sendToTelegram(botToken, chatId, imageDataUrl, excelBlob = null, customCaption = null, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const photoForm = new FormData();
       photoForm.append('chat_id', chatId);
       const imgBlob = await (await fetch(imageDataUrl)).blob();
       photoForm.append('photo', imgBlob, 'capture.png');
-      photoForm.append('caption', `Tự động gửi lúc ${new Date().toLocaleString('vi-VN')}`);
+      
+      // Use custom caption if provided, otherwise use default timestamp
+      const caption = customCaption || `Tự động gửi lúc ${new Date().toLocaleString('vi-VN')}`;
+      photoForm.append('caption', caption);
 
-      const docPromise = excelBlob ? (async () => {
-        const docForm = new FormData();
-        docForm.append('chat_id', chatId);
-        docForm.append('document', excelBlob, 'data.xlsx');
-        const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: docForm });
-        if (!resp.ok) {
-          const error = await resp.json();
-          throw new Error(`Telegram Document Error: ${error.description || 'Unknown'}`);
-        }
-        return resp;
-      })() : null;
-
-      const photoPromise = fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: photoForm });
-      const [photoResp, docResp] = await Promise.all([photoPromise, docPromise]);
+      // Only send photo (Excel sending disabled)
+      const photoResp = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: photoForm });
 
       if (!photoResp.ok) {
         const error = await photoResp.json();
         throw new Error(`Telegram Photo Error: ${error.description || 'Unknown'}`);
       }
 
-      console.log(`[TELEGRAM] ✅ Sent successfully`);
+      console.log(`[TELEGRAM] ✅ Sent screenshot successfully`);
       return; // Success
       
     } catch (err) {
@@ -352,12 +365,8 @@ async function runJobForTab(tabId) {
     try {
       console.log(`[JOB] 📄 Attempt ${attempt + 1}/${DEFAULT_RETRY + 1}: Preparing tab ${tabId}...`);
       
-      // CRITICAL: Focus tab before any operations to avoid background tab issues
-      const targetTab = await chrome.tabs.get(tabId);
-      await chrome.windows.update(targetTab.windowId, { focused: true });
-      await chrome.tabs.update(tabId, { active: true });
-      await sleep(FOCUS_SWITCH_DELAY);
-      console.log(`[JOB] ✅ Tab ${tabId} is now active and focused`);
+      // NOTE: We do NOT focus tab here to avoid conflicts with other auto jobs
+      // Tab will only be focused right before screenshot capture
       
       // Check if we should reload (skip reload if this is a retry and tab is already loaded)
       let shouldReload = true;
@@ -373,9 +382,9 @@ async function runJobForTab(tabId) {
         }
       }
       
-      // Reload tab (if needed)
+      // Reload tab (if needed) - can run in background
       if (shouldReload) {
-        console.log(`[JOB] 🔄 Reloading tab ${tabId}...`);
+        console.log(`[JOB] 🔄 Reloading tab ${tabId} (in background)...`);
         await chrome.tabs.reload(tabId, { bypassCache: attempt === 0 }); // Only bypass cache on first attempt
       } else {
         console.log(`[JOB] ⏭️ Skipping reload on retry attempt ${attempt + 1}`);
@@ -402,82 +411,99 @@ async function runJobForTab(tabId) {
         console.warn(`[JOB] ⚠️ Content script not responding (may still work):`, e.message);
       }
       
-      // Inject and execute scraping logic (all-in-one) with proper error handling
-      console.log(`[JOB] 📊 Scraping data from tab ${tabId}...`);
-      let injectResult;
+      // Inject date range and apply filters if configured
+      const startDate = tabConf.startDate || null;
+      const endDate = tabConf.endDate || null;
       
-      try {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: inlineScrapeFunction
-        });
-        
-        if (!results || results.length === 0) {
-          throw new Error('executeScript returned no results');
+      if (startDate && endDate) {
+        console.log(`[JOB] 📅 Applying date range: ${startDate} to ${endDate}`);
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: applyDateRangeFunction,
+            args: [startDate, endDate]
+          });
+          console.log(`[JOB] ✅ Date range applied successfully`);
+        } catch (err) {
+          console.warn('[JOB] ⚠️ Failed to apply date range:', err.message);
         }
-        
-        injectResult = results[0];
-        
-        if (chrome.runtime.lastError) {
-          throw new Error(`Runtime error: ${chrome.runtime.lastError.message}`);
-        }
-        
-      } catch (err) {
-        console.error(`[JOB] ❌ Script injection failed for tab ${tabId}:`, err);
-        throw new Error(`Failed to inject scraping script: ${err.message}`);
+      } else {
+        console.log(`[JOB] ℹ️ No date range configured, skipping date filter`);
       }
       
-      const tableData = injectResult?.result || [];
-      console.log(`[JOB] 📊 Scraped ${tableData.length} rows`);
+      // NEW STEP: Download Google Sheet if fileName is configured
+      const fileName = tabConf.fileName || null;
+      let formattedFileName = null; // Will be used for Telegram caption
       
-      if (!tableData || tableData.length <= 1) {
-        throw new Error('No table data found or table is empty');
+      if (fileName) {
+        // Format fileName with current date and time: fileName_DD-MM-YYYY_HH-mm
+        const now = new Date();
+        const day = String(now.getDate()).padStart(2, '0');
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const year = now.getFullYear();
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        formattedFileName = `${fileName}_${day}-${month}-${year}_${hours}-${minutes}`;
+        
+        console.log(`[JOB] 📥 Downloading Google Sheet with name: "${formattedFileName}"`);
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: downloadGoogleSheetFunction,
+            args: [formattedFileName]
+          });
+          console.log(`[JOB] ✅ Google Sheet download initiated successfully`);
+          
+          // Wait a bit longer for download to complete
+          await sleep(2000);
+        } catch (err) {
+          console.warn('[JOB] ⚠️ Failed to download Google Sheet:', err.message);
+          // Continue anyway - don't fail the whole job
+        }
+      } else {
+        console.log(`[JOB] ℹ️ No file name configured, skipping Google Sheet download`);
       }
       
-      // Create Excel
-      console.log(`[JOB] 📑 Creating Excel file...`);
-      const worksheet = XLSX.utils.aoa_to_sheet(tableData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'DataExport');
-      const excelArrayBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-      const excelBlob = new Blob([excelArrayBuffer], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-      });
-      console.log(`[JOB] 📑 Excel created, size: ${excelBlob.size} bytes`);
-      
-      // Ensure tab is still active and visible before capture
-      try {
-        const currentTab = await chrome.tabs.get(tabId);
-        if (!currentTab.active) {
-          console.log(`[JOB] ⚠️ Tab lost focus, re-activating...`);
+      // CRITICAL: Enqueue capture to prevent conflicts when multiple tabs capture simultaneously
+      const imageDataUrl = await enqueueCaptureJob(tabId, async () => {
+        // IMPORTANT: Focus tab ONLY before capture to avoid conflicts with other auto jobs
+        console.log(`[JOB] 🎯 Focusing tab ${tabId} for screenshot capture...`);
+        try {
+          const targetTab = await chrome.tabs.get(tabId);
+          await chrome.windows.update(targetTab.windowId, { focused: true });
           await chrome.tabs.update(tabId, { active: true });
-          await sleep(300);
+          await sleep(FOCUS_SWITCH_DELAY); // Wait for tab to fully activate
+          console.log(`[JOB] ✅ Tab ${tabId} is now active and ready for capture`);
+        } catch (e) {
+          console.warn('[JOB] Could not focus tab before capture:', e.message);
         }
-      } catch (e) {
-        console.warn('[JOB] Could not verify tab state:', e.message);
-      }
+        
+        // Capture screenshot (with fallback)
+        console.log(`[JOB] 📸 Capturing screenshot...`);
+        const imageDataUrl = await captureTab(tabId);
+        console.log(`[JOB] 📸 Screenshot captured successfully`);
+        
+        // IMPORTANT: Restore original tab IMMEDIATELY after capture
+        // This allows user to continue working while we send to Telegram in background
+        if (originalTab && originalTab.id !== tabId) {
+          try {
+            await sleep(AFTER_CAPTURE_DELAY);
+            await chrome.tabs.update(originalTab.id, { active: true });
+            console.log(`[JOB] 🔙 Restored original tab ${originalTab.id}`);
+          } catch (e) {
+            console.warn('[JOB] Could not restore original tab:', e.message);
+          }
+        }
+        
+        return imageDataUrl;
+      });
       
-      // Capture screenshot (with fallback)
-      console.log(`[JOB] 📸 Capturing screenshot...`);
-      const imageDataUrl = await captureTab(tabId);
-      console.log(`[JOB] 📸 Screenshot captured successfully`);
-      
-      // Send to Telegram
-      console.log(`[JOB] 📤 Sending to Telegram...`);
-      await sendToTelegram(botToken, chatId, imageDataUrl, excelBlob);
+      // Send to Telegram with custom caption (screenshot only, no Excel)
+      // This runs in background after restoring user's tab
+      console.log(`[JOB] 📤 Sending screenshot to Telegram...`);
+      await sendToTelegram(botToken, chatId, imageDataUrl, null, formattedFileName);
       
       console.log(`[JOB] ✅ Job completed successfully for tab ${tabId}`);
-      
-      // Restore original tab if different
-      if (originalTab && originalTab.id !== tabId) {
-        try {
-          await sleep(AFTER_CAPTURE_DELAY);
-          await chrome.tabs.update(originalTab.id, { active: true });
-          console.log(`[JOB] 🔙 Restored original tab ${originalTab.id}`);
-        } catch (e) {
-          console.warn('[JOB] Could not restore original tab:', e.message);
-        }
-      }
       
       // Success badge
       chrome.action.setBadgeText({ text: '✓', tabId });
@@ -515,9 +541,9 @@ async function runJobForTab(tabId) {
   }
 }
 
-// ---- Inline Scraping Function (injected into page) ----
+// ---- Apply Date Range Function (injected into page) ----
 // This function is injected and runs IN THE PAGE CONTEXT
-async function inlineScrapeFunction() {
+async function applyDateRangeFunction(startDateStr, endDateStr) {
   // Helper functions - must be self-contained
   const delay = ms => new Promise(r => setTimeout(r, ms));
   
@@ -573,25 +599,75 @@ async function inlineScrapeFunction() {
     }
   }
   
-  // Step 1: Select "Hôm nay" (Today) - with retry
+  // Step 1: Click dropdown and fill date range (Start Date & End Date) - with retry
   try {
     await retry(async () => {
-      const ddBtn = document.querySelector('dropdown-button.menu-trigger.primary-range .button') || 
-                    document.querySelector('.date-range .button');
-      if (!ddBtn) throw new Error('Dropdown button not found');
+      if (!startDateStr || !endDateStr) {
+        console.warn('[DATE] ⚠️ No date range provided, skipping');
+        return;
+      }
       
-      ddBtn.click();
-      await delay(400);
+      console.log(`[DATE] 📅 Setting date range: ${startDateStr} to ${endDateStr}`);
       
-      const today = await waitForElement('material-select-item[aria-label="Hôm nay"]', 3000);
-      if (!today) throw new Error('Today option not found');
+      // Step 1.1: Find and click the dropdown button to open date picker popup
+      const dropdownBtn = document.querySelector('dropdown-button.menu-trigger.primary-range .button') ||
+                         document.querySelector('dropdown-button.primary-range .button') ||
+                         document.querySelector('.date-range .button');
       
-      today.click();
-      await delay(400);
-      console.log('[SCRAPE] ✅ Selected "Hôm nay"');
+      if (!dropdownBtn) throw new Error('Dropdown button not found');
+      
+      console.log('[DATE] 🔽 Clicking dropdown button to open date picker...');
+      dropdownBtn.click();
+      await delay(500); // Wait for popup to open
+      
+      // Step 1.2: Wait for date inputs to appear in the popup
+      const startInput = await waitForElement('material-input.start.date-input input', 3000);
+      if (!startInput) throw new Error('Start date input not found after opening dropdown');
+      
+      const endInput = document.querySelector('material-input.end.date-input input') ||
+                      document.querySelector('.end.date-input input');
+      if (!endInput) throw new Error('End date input not found');
+      
+      console.log('[DATE] ✅ Date picker popup opened, inputs found');
+      
+      // Helper to format date from yyyy-MM-dd to d/M/yyyy
+      const formatDate = (dateStr) => {
+        const [year, month, day] = dateStr.split('-');
+        return `${parseInt(day)}/${parseInt(month)}/${year}`;
+      };
+      
+      // Step 1.3: Fill start date
+      startInput.focus();
+      await delay(100);
+      startInput.value = formatDate(startDateStr);
+      startInput.dispatchEvent(new Event('input', { bubbles: true }));
+      startInput.dispatchEvent(new Event('change', { bubbles: true }));
+      startInput.blur();
+      await delay(300);
+      
+      console.log(`[DATE] ✅ Filled start date: ${formatDate(startDateStr)}`);
+      
+      // Step 1.4: Fill end date
+      endInput.focus();
+      await delay(100);
+      endInput.value = formatDate(endDateStr);
+      endInput.dispatchEvent(new Event('input', { bubbles: true }));
+      endInput.dispatchEvent(new Event('change', { bubbles: true }));
+      endInput.blur();
+      await delay(300);
+      
+      console.log(`[DATE] ✅ Filled end date: ${formatDate(endDateStr)}`);
+      
+      // Step 1.5: Wait for "Áp dụng" button to appear and click it
+      const applyBtn = await waitForElement('material-button.apply', 3000);
+      if (!applyBtn) throw new Error('Apply button not found');
+      
+      applyBtn.click();
+      await delay(600); // Wait for popup to close and data to load
+      console.log('[DATE] ✅ Clicked "Áp dụng" button');
     }, 2, 800);
   } catch (e) {
-    console.warn('[SCRAPE] ⚠️ Failed to select today:', e.message);
+    console.warn('[DATE] ⚠️ Failed to set date range:', e.message);
   }
   
   // Step 2: Wait for progress indicator to show then hide (data loading) - with retry
@@ -609,7 +685,7 @@ async function inlineScrapeFunction() {
           continue;
         }
         if (seen) {
-          console.log('[SCRAPE] ✅ Data loaded (progress indicator hidden)');
+          console.log('[DATE] ✅ Data loaded (progress indicator hidden)');
           return; // Progress was shown and now hidden - data loaded
         }
         await delay(200);
@@ -617,17 +693,17 @@ async function inlineScrapeFunction() {
       
       // If we never saw progress bar, table might already be loaded
       if (!seen) {
-        console.log('[SCRAPE] ℹ️ No progress indicator found, assuming data ready');
+        console.log('[DATE] ℹ️ No progress indicator found, assuming data ready');
         return;
       }
       
       throw new Error('Data loading timeout');
     }, 2, 1000);
   } catch (e) {
-    console.warn('[SCRAPE] ⚠️ Failed waiting for progress:', e.message);
+    console.warn('[DATE] ⚠️ Failed waiting for progress:', e.message);
   }
   
-  // Step 3: Wait for table to appear and scroll to BOTTOM - with retry
+  // Step 3: Scroll to bottom to load all lazy-loaded rows - with retry
   try {
     await retry(async () => {
       const canvas = await waitForElement('.ess-table-canvas', 5000);
@@ -642,7 +718,7 @@ async function inlineScrapeFunction() {
                              (canvas.parentElement?.scrollHeight > canvas.parentElement?.clientHeight ? canvas.parentElement : null);
       
       if (scrollContainer) {
-        console.log('[SCRAPE] 📜 Scrolling to bottom of table to load all rows...');
+        console.log('[DATE] 📜 Scrolling to bottom of table to load all rows...');
         
         // Scroll to bottom to trigger lazy loading
         const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
@@ -653,118 +729,191 @@ async function inlineScrapeFunction() {
         scrollContainer.scrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
         await delay(500);
         
-        console.log(`[SCRAPE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
+        console.log(`[DATE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
       } else {
         // If no scrollable container, try window scroll
-        console.log('[SCRAPE] 📜 Scrolling window to bottom of table...');
+        console.log('[DATE] 📜 Scrolling window to bottom of table...');
         const tableBottom = canvas.getBoundingClientRect().bottom + window.pageYOffset;
         window.scrollTo({ top: tableBottom, behavior: 'auto' });
         await delay(800);
-        console.log('[SCRAPE] ✅ Scrolled window to table bottom');
+        console.log('[DATE] ✅ Scrolled window to table bottom');
       }
       
     }, 2, 800);
   } catch (e) {
-    console.warn('[SCRAPE] ⚠️ Failed to scroll:', e.message);
+    console.warn('[DATE] ⚠️ Failed to scroll:', e.message);
   }
   
-  // Step 4: Scrape table data - with retry
-  function scrapeTable() {
-    const results = [];
+  // Done - data is now filtered by date range and all rows loaded
+  console.log('[DATE] ✅ Date range applied and all data loaded');
+  return true;
+}
+
+// ---- Download Google Sheet Function ----
+async function downloadGoogleSheetFunction(fileName = 'Report') {
+  // Helper functions - must be self-contained
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  
+  async function waitForSelector(selector, timeout = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+      await delay(200);
+    }
+    return null;
+  }
+  
+  // MutationObserver-based wait for element (handles dynamic content)
+  async function waitForElement(selector, timeout = 8000) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(selector);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+      
+      const observer = new MutationObserver((mutations, obs) => {
+        const el = document.querySelector(selector);
+        if (el) {
+          obs.disconnect();
+          resolve(el);
+        }
+      });
+      
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+      
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`Element ${selector} not found after ${timeout}ms`));
+      }, timeout);
+    });
+  }
+  
+  // Retry wrapper for operations
+  async function retry(fn, retries = 3, delayMs = 1000) {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (e) {
+        console.warn(`[RETRY] Attempt ${i + 1}/${retries} failed:`, e.message);
+        if (i === retries - 1) throw e;
+        await delay(delayMs * (i + 1));
+      }
+    }
+  }
+  
+  try {
+    console.log('[DOWNLOAD] 📥 Starting Google Sheet download process...');
     
-    // Find header row
-    const headerRow = document.querySelector('.particle-table-header[role="row"]');
-    const headers = [];
-    const headerMap = {};
-    
-    if (headerRow) {
-      headerRow.querySelectorAll('.particle-table-header-cell[role="columnheader"]').forEach(cell => {
-        const key = cell.getAttribute('essfield') || 
-                    cell.getAttribute('data-field') || 
-                    cell.getAttribute('field');
-        
-        // Get text from aria-label first (most reliable)
-        let text = cell.getAttribute('aria-label');
-        
-        // Fallback to innerText but clean it
-        if (!text) {
-          const headerCellElement = cell.querySelector('aw-header-cell');
-          if (headerCellElement) {
-            // Clone and remove icon elements before getting text
-            const clone = headerCellElement.cloneNode(true);
-            
-            // Remove Material Icons (i, mat-icon, etc.)
-            const icons = clone.querySelectorAll('i, mat-icon, .material-icons, [class*="icon"]');
-            icons.forEach(icon => icon.remove());
-            
-            text = clone.innerText || clone.textContent;
-          } else {
-            text = cell.innerText || cell.textContent;
+    // Step 1: Find and click the download button (nút "Tải xuống")
+    await retry(async () => {
+      // Find the specific download button with class "report-download-menu-item"
+      let downloadBtn = null;
+      
+      // Method 1: Most specific - Find by menu class "report-download-menu-item"
+      const downloadMenu = document.querySelector('material-menu.report-download-menu-item');
+      if (downloadMenu) {
+        downloadBtn = downloadMenu.querySelector('material-button.trigger-button');
+      }
+      
+      // Method 2: Direct selector combining class and structure
+      if (!downloadBtn) {
+        downloadBtn = document.querySelector('toolbelt-material-menu material-menu.report-download-menu-item material-button.trigger-button');
+      }
+      
+      // Method 3: Find in right-panel with specific structure
+      if (!downloadBtn) {
+        const rightPanel = document.querySelector('toolbelt-bar .right-panel');
+        if (rightPanel) {
+          const menus = rightPanel.querySelectorAll('material-menu');
+          for (const menu of menus) {
+            if (menu.classList.contains('report-download-menu-item')) {
+              downloadBtn = menu.querySelector('material-button.trigger-button');
+              break;
+            }
           }
         }
-        
-        // Clean text: trim, remove extra spaces, remove icon text like "expand_more"
-        if (text) {
-          text = text.trim()
-                     .replace(/\s+/g, ' ')
-                     .replace(/expand_more|expand_less|arrow_drop_down|arrow_drop_up/gi, '')
-                     .trim();
-        }
-        
-        if (key && text) {
-          headers.push(text);
-          headerMap[key] = text;
-        }
-      });
-    }
-    
-    results.push(headers);
-    
-    // Find data rows
-    const rows = document.querySelectorAll('.ess-table-canvas > div[role="row"]:not(.particle-table-header):not(.summary-draft-overview-row):not(.particle-table-placeholder)');
-    
-    if (!rows || rows.length === 0) {
-      // Fallback to simple table
-      const table = document.querySelector('table');
-      if (table) {
-        return Array.from(table.rows).map(r => 
-          Array.from(r.cells).map(c => c.innerText.trim())
-        );
       }
-      return results;
-    }
-    
-    rows.forEach(row => {
-      const map = {};
-      row.querySelectorAll('ess-cell[role="gridcell"]').forEach(cell => {
-        const k = cell.getAttribute('essfield');
-        if (k) {
-          // Get cell text and clean it
-          let cellText = cell.innerText || cell.textContent || '';
-          
-          // Remove common icon texts
-          cellText = cellText.trim()
-                             .replace(/\s+/g, ' ')
-                             .replace(/expand_more|expand_less|arrow_drop_down|arrow_drop_up|check|close|edit|delete|more_vert/gi, '')
-                             .trim();
-          
-          map[k] = cellText;
-        }
-      });
       
-      const out = headers.map(h => {
-        const k = Object.keys(headerMap).find(key => headerMap[key] === h);
-        return map[k] || '';
-      });
+      if (!downloadBtn) throw new Error('Download button not found');
       
-      results.push(out);
-    });
+      console.log('[DOWNLOAD] 🔽 Clicking download button...');
+      downloadBtn.click();
+      await delay(800); // Wait for popup menu to appear
+      console.log('[DOWNLOAD] ✅ Download menu opened');
+    }, 3, 1000);
     
-    return results;
+    // Step 2: Wait for menu popup and click "Google Trang tính" option
+    await retry(async () => {
+      // Wait for the menu to appear
+      const googleSheetOption = await waitForElement('material-select-item[aria-label="Google Trang tính"]', 5000);
+      if (!googleSheetOption) throw new Error('Google Sheets option not found in menu');
+      
+      console.log('[DOWNLOAD] 📊 Clicking "Google Trang tính" option...');
+      googleSheetOption.click();
+      await delay(1000); // Wait for dialog to appear
+      console.log('[DOWNLOAD] ✅ Google Sheets option selected');
+    }, 3, 1000);
+    
+    // Step 3: Wait for dialog and fill in file name
+    await retry(async () => {
+      // Wait for the dialog to appear
+      const dialog = await waitForElement('material-dialog.basic-dialog', 5000);
+      if (!dialog) throw new Error('Download dialog not found');
+      
+      console.log('[DOWNLOAD] 📝 Dialog appeared, looking for file name input...');
+      
+      // Find the file name input field
+      const fileNameInput = dialog.querySelector('material-input input[type="text"]') ||
+                           dialog.querySelector('material-input.themeable input');
+      
+      if (!fileNameInput) throw new Error('File name input not found in dialog');
+      
+      console.log(`[DOWNLOAD] ✏️ Filling file name: "${fileName}"...`);
+      
+      // Clear existing value and set new file name
+      fileNameInput.focus();
+      await delay(200);
+      fileNameInput.value = '';
+      await delay(100);
+      fileNameInput.value = fileName;
+      fileNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      fileNameInput.dispatchEvent(new Event('change', { bubbles: true }));
+      fileNameInput.blur();
+      await delay(300);
+      
+      console.log('[DOWNLOAD] ✅ File name filled successfully');
+    }, 3, 1000);
+    
+    // Step 4: Click the final download button in the dialog
+    await retry(async () => {
+      // Find the "Tải xuống" button in the dialog (btn-yes highlighted)
+      const finalDownloadBtn = document.querySelector('material-dialog material-button.btn-yes.highlighted') ||
+                              document.querySelector('material-yes-no-buttons material-button.btn-yes') ||
+                              Array.from(document.querySelectorAll('material-dialog material-button')).find(btn => 
+                                btn.textContent.trim() === 'Tải xuống'
+                              );
+      
+      if (!finalDownloadBtn) throw new Error('Final download button not found');
+      
+      console.log('[DOWNLOAD] ⬇️ Clicking final "Tải xuống" button...');
+      finalDownloadBtn.click();
+      await delay(1500); // Wait for download to initiate
+      
+      console.log('[DOWNLOAD] ✅ Download initiated successfully');
+    }, 3, 1000);
+    
+    console.log('[DOWNLOAD] 🎉 Google Sheet download process completed!');
+    return true;
+    
+  } catch (e) {
+    console.error('[DOWNLOAD] ❌ Failed to download Google Sheet:', e.message);
+    throw e;
   }
-  
-  // Execute scraping and return results
-  return scrapeTable();
 }
 
 // ---- Message Handler (using Alarms API instead of setInterval) ----

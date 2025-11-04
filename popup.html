@@ -2,130 +2,288 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Công cụ Tab</title>
+  <title>Auto Chụp Ảnh</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      width: 250px;
-      padding: 10px;
-      text-align: center;
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
     }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      width: 320px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+    }
+    
+    .container {
+      background: white;
+      margin: 0;
+      padding: 0;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 12px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: 0.3px;
+    }
+    
+    .content {
+      padding: 12px;
+    }
+    
+    .section {
+      margin-bottom: 14px;
+    }
+    
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #667eea;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .divider {
+      height: 1px;
+      background: linear-gradient(to right, transparent, #e0e0e0, transparent);
+      margin: 12px 0;
+    }
+    
     button {
       width: 100%;
-      padding: 10px;
-      margin-top: 10px;
-      font-size: 14px;
+      padding: 8px 12px;
+      margin-top: 6px;
+      font-size: 13px;
+      font-weight: 500;
       cursor: pointer;
       border: none;
-      border-radius: 4px;
+      border-radius: 6px;
       color: white;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     }
-    #selectAreaBtn {
-      background-color: #f4b400; /* Màu Google Yellow */
-    }
-    #clearAreaBtn {
-      background-color: #ea4335; /* Màu Google Red */
-      font-size: 12px;
-      padding: 6px;
-      margin-top: 5px;
-    }
-    #screenshotBtn {
-      background-color: #4285F4; /* Màu Google Blue */
-    }
-    #excelBtn {
-      background-color: #0F9D58; /* Màu Google Green */
-    }
+    
     button:hover {
-      opacity: 0.9;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      transform: translateY(-1px);
     }
+    
+    button:active {
+      transform: scale(0.98);
+    }
+    
     button:disabled {
-      opacity: 0.5;
+      opacity: 0.6;
       cursor: not-allowed;
+      transform: none;
     }
-    .telegram-section {
-      margin-top: 15px;
-      text-align: left;
+    
+    #selectAreaBtn {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
     }
-    .telegram-section input {
-      width: calc(100% - 10px);
-      padding: 5px;
-      margin-top: 5px;
+    
+    #clearAreaBtn {
+      background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-top: 4px;
     }
-    .telegram-section label {
-      font-size: 12px;
-    }
+    
     #saveTelegramBtn {
-        background-color: #6c757d;
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
+    
     #sendTelegramBtn {
-        background-color: #0088cc; /* Telegram Blue */
-        font-weight: bold;
+      background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+      margin-top: 8px;
     }
+    
     #sendTelegramBtn.running {
-        background-color: #dc3545; /* Red for stop */
+      background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
     }
-    .auto-section {
-        margin-top: 10px;
-        text-align: left;
+    
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    input[type="date"] {
+      width: 100%;
+      padding: 7px 10px;
+      margin-top: 4px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 12px;
+      transition: all 0.2s ease;
+      background: #f8f9fa;
     }
-    .auto-section input {
-        width: 60px;
+    
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      background: white;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
     }
+    
+    label {
+      font-size: 11px;
+      font-weight: 500;
+      color: #555;
+      display: block;
+      margin-top: 8px;
+    }
+    
+    label:first-child {
+      margin-top: 0;
+    }
+    
+    .input-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 6px;
+    }
+    
+    .input-group input {
+      margin-top: 0;
+    }
+    
     .region-info {
-        background-color: #f0f0f0;
-        padding: 8px;
-        margin: 5px 0;
-        border-radius: 4px;
-        font-size: 11px;
-        text-align: left;
+      background: linear-gradient(135deg, #e0f7fa 0%, #e1bee7 100%);
+      padding: 8px 10px;
+      margin: 6px 0 4px 0;
+      border-radius: 6px;
+      font-size: 11px;
+      border-left: 3px solid #667eea;
     }
+    
     .region-info strong {
-        color: #0F9D58;
+      color: #667eea;
+      display: block;
+      margin-bottom: 3px;
+      font-size: 11px;
     }
+    
     .countdown {
-        background-color: #e3f2fd;
-        padding: 6px;
-        margin: 5px 0;
-        border-radius: 4px;
-        font-size: 12px;
-        font-weight: bold;
-        color: #1976d2;
+      background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+      padding: 7px 10px;
+      margin: 6px 0;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #d84315;
+      text-align: center;
+      border-left: 3px solid #ff6f00;
+    }
+    
+    #statusMessage {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      text-align: center;
+      animation: fadeIn 0.3s ease;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
     }
   </style>
 </head>
 <body>
-  <h3>Công cụ Tab</h3>
-  
-  <button id="selectAreaBtn">✂️ Chọn Vùng Chụp</button>
-  <div id="regionInfo" style="display:none;" class="region-info">
-    <strong>✓ Đã chọn vùng:</strong><br>
-    <span id="regionText"></span>
+  <div class="container">
+    <div class="header">
+      <h2>🚀 Auto Chụp Ảnh</h2>
+    </div>
+    
+    <div class="content">
+      <!-- Screenshot Section -->
+      <div class="section">
+        <div class="section-title">📸 Vùng Chụp Ảnh</div>
+        <button id="selectAreaBtn">✂️ Chọn Vùng Chụp</button>
+        <div id="regionInfo" style="display:none;" class="region-info">
+          <strong>✓ Đã chọn vùng</strong>
+          <div class="info-row">
+            <span>Kích thước:</span>
+            <span id="regionText"></span>
+          </div>
+        </div>
+        <button id="clearAreaBtn" style="display:none;">🗑️ Xóa Vùng Đã Chọn</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Telegram Config Section -->
+      <div class="section">
+        <div class="section-title">🤖 Cấu Hình Telegram</div>
+        <label for="botToken">Bot Token (chung cho tất cả tab)</label>
+        <input type="password" id="botToken" placeholder="123456:ABC-DEF...">
+        
+        <label for="chatId">Chat ID (riêng cho tab này)</label>
+        <input type="text" id="chatId" placeholder="987654321">
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Auto Settings Section -->
+      <div class="section">
+        <div class="section-title">⚙️ Cài Đặt Auto</div>
+        
+        <div class="input-group">
+          <div>
+            <label for="interval">Gửi mỗi (phút)</label>
+            <input type="number" id="interval" min="1" value="10">
+          </div>
+          <div>
+            <label for="pageLoadTimeout">Timeout (ms)</label>
+            <input type="number" id="pageLoadTimeout" min="1000" value="3000">
+          </div>
+        </div>
+        
+        <label for="startDate">Ngày bắt đầu</label>
+        <input type="date" id="startDate">
+        
+        <label for="endDate">Ngày kết thúc</label>
+        <input type="date" id="endDate">
+        
+        <label for="fileName">Tên file Google Sheet (để trống = bỏ qua)</label>
+        <input type="text" id="fileName" placeholder="Ví dụ: Báo cáo ngày 04-11">
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Action Buttons -->
+      <div class="section">
+        <button id="saveTelegramBtn">💾 Lưu Cấu Hình</button>
+        
+        <div id="countdown" class="countdown" style="display:none;"></div>
+        
+        <button id="sendTelegramBtn">🚀 Bắt Đầu Auto</button>
+      </div>
+    </div>
   </div>
-  <button id="clearAreaBtn" style="display:none;">🗑️ Xóa vùng đã chọn</button>
-
-  <hr style="border: 0; border-top: 1px solid #ddd; margin-top: 15px;">
-
-  <div class="telegram-section">
-      <label for="botToken">Bot Token (Dùng chung):</label>
-      <input type="password" id="botToken" placeholder="Nhập Bot Token của bạn">
-      <label for="chatId">Chat ID (Riêng cho tab này):</label>
-      <input type="text" id="chatId" placeholder="Nhập Chat ID">
-      <button id="saveTelegramBtn">💾 Lưu</button>
-  </div>
-
-  <hr style="border: 0; border-top: 1px solid #ddd; margin-top: 15px;">
-
-  <div class="auto-section">
-      <label for="interval">Gửi mỗi (phút):</label>
-      <input type="number" id="interval" min="1" value="10">
-      
-      <label for="pageLoadTimeout" style="margin-top: 8px; display: block;">Timeout tải trang (ms):</label>
-      <input type="number" id="pageLoadTimeout" min="1000" value="3000" style="width: 100px;">
-  </div>
-
-  <div id="countdown" class="countdown" style="display:none;"></div>
-
-  <button id="sendTelegramBtn">🚀 Bắt đầu Auto</button>
 
   <script src="xlsx.full.min.js"></script>
   <script src="popup.js"></script>

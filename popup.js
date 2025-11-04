@@ -80,6 +80,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const sendBtn = document.getElementById('sendTelegramBtn');
   const intervalInput = document.getElementById('interval');
   const pageLoadTimeoutInput = document.getElementById('pageLoadTimeout');
+  const startDateInput = document.getElementById('startDate');
+  const endDateInput = document.getElementById('endDate');
+  const fileNameInput = document.getElementById('fileName');
 
   // Lấy tab hiện tại để biết ID
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -121,6 +124,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (tabSpecificSettings.pageLoadTimeout) {
               pageLoadTimeoutInput.value = tabSpecificSettings.pageLoadTimeout;
           }
+          if (tabSpecificSettings.startDate) {
+              startDateInput.value = tabSpecificSettings.startDate;
+          }
+          if (tabSpecificSettings.endDate) {
+              endDateInput.value = tabSpecificSettings.endDate;
+          }
+          if (tabSpecificSettings.fileName) {
+              fileNameInput.value = tabSpecificSettings.fileName;
+          }
           
           // Hiển thị region nếu có
           updateRegionDisplay(tabSpecificSettings.captureRegion);
@@ -142,6 +154,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const chatId = document.getElementById('chatId').value;
     const interval = parseInt(intervalInput.value, 10);
     const pageLoadTimeout = parseInt(pageLoadTimeoutInput.value, 10);
+    const startDate = startDateInput.value;
+    const endDate = endDateInput.value;
+    const fileName = fileNameInput.value.trim();
 
     if (!botToken) {
       showStatus('Vui lòng nhập Bot Token.', true);
@@ -164,6 +179,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         tabSettings[activeTabId].chatId = chatId;
         tabSettings[activeTabId].interval = interval;
         tabSettings[activeTabId].pageLoadTimeout = pageLoadTimeout;
+        tabSettings[activeTabId].startDate = startDate;
+        tabSettings[activeTabId].endDate = endDate;
+        tabSettings[activeTabId].fileName = fileName;
 
         chrome.storage.local.set({ globalSettings, tabSettings }, () => {
           showStatus('Đã lưu thông tin!');
