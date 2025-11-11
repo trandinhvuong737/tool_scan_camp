@@ -1,5 +1,4 @@
 // background.js — Service Worker với Queue, TabCapture Fallback, và Alarms API
-importScripts('xlsx.full.min.js');
 
 // Constants
 const DEFAULT_RETRY = 2;
@@ -14,8 +13,62 @@ const CAPTURE_REGIONS = new Map(); // tabId → { region, dpr }
 // Global capture lock to prevent multiple tabs from capturing at the same time
 let captureQueue = Promise.resolve(); // Global queue for screenshot captures
 
+// Storage write lock to prevent race condition when multiple tabs write simultaneously
+let storageWriteQueue = Promise.resolve();
+
+// Helper to safely write to storage with mutex lock
+async function safeStorageWrite(updateFn) {
+  const prev = storageWriteQueue;
+  const next = prev.then(async () => {
+    try {
+      return await updateFn();
+    } catch (e) {
+      console.error('[STORAGE] Write error:', e);
+      throw e;
+    }
+  });
+  storageWriteQueue = next;
+  return next;
+}
+
 // ---- Utility ----
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Safe focus with retry on "tab editing locked" error
+async function safeFocusTab(tabId, maxRetries = 3) {
+  const targetTab = await chrome.tabs.get(tabId);
+  if (!targetTab) throw new Error('Tab not found');
+  
+  let retries = maxRetries;
+  while (retries > 0) {
+    try {
+      await chrome.windows.update(targetTab.windowId, { focused: true });
+      await chrome.tabs.update(tabId, { active: true });
+      console.log(`[FOCUS] ✅ Successfully focused tab ${tabId}`);
+      return; // Success
+    } catch (e) {
+      retries--;
+      const errorMsg = e.message || '';
+      const isTabLocked = errorMsg.includes('user may be dragging') || 
+                         errorMsg.includes('cannot be edited') ||
+                         errorMsg.includes('Tabs cannot be edited');
+      
+      if (retries === 0) {
+        console.error(`[FOCUS] ❌ Failed to focus tab ${tabId} after ${maxRetries} attempts:`, errorMsg);
+        throw e;
+      }
+      
+      if (isTabLocked) {
+        const waitTime = 800 + (maxRetries - retries) * 400; // 800ms, 1200ms, 1600ms
+        console.warn(`[FOCUS] ⏸️ Tab editing locked, waiting ${waitTime}ms... (${retries} retries left)`);
+        await sleep(waitTime);
+      } else {
+        console.warn(`[FOCUS] ⚠️ Focus error: ${errorMsg}, retrying in 300ms...`);
+        await sleep(300);
+      }
+    }
+  }
+}
 
 // Enqueue screenshot capture to prevent conflicts when multiple tabs capture simultaneously
 function enqueueCaptureJob(tabId, captureFn) {
@@ -118,21 +171,75 @@ async function focusAndCapture(tabId) {
     const [active] = await chrome.tabs.query({ active: true, windowId: targetTab.windowId });
     const originalActiveId = active?.id;
     
-    // Focus target tab's window then the tab
-    await chrome.windows.update(targetTab.windowId, { focused: true });
-    await chrome.tabs.update(tabId, { active: true });
+    // Focus target tab with retry on "tab editing locked"
+    await safeFocusTab(tabId, 3);
+    
+    // Wait for tab to be fully ready and rendered
     await sleep(FOCUS_SWITCH_DELAY);
     
-    // Capture
-    const imageDataUrl = await new Promise((resolve, reject) => {
-      chrome.tabs.captureVisibleTab(targetTab.windowId, { format: 'png' }, dataUrl => {
-        if (chrome.runtime.lastError || !dataUrl) {
-          reject(new Error('captureVisibleTab error: ' + (chrome.runtime.lastError?.message || 'no data')));
+    // Additional wait to ensure GPU rendering completes
+    // This fixes "image readback failed" error
+    await new Promise(resolve => {
+      chrome.tabs.get(tabId, tab => {
+        if (tab.status === 'complete') {
+          // Tab is complete, wait a bit more for GPU
+          setTimeout(resolve, 300);
         } else {
-          resolve(dataUrl);
+          // Tab not complete yet, wait for it
+          const listener = (updTabId, changeInfo) => {
+            if (updTabId === tabId && changeInfo.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(listener);
+              setTimeout(resolve, 300);
+            }
+          };
+          chrome.tabs.onUpdated.addListener(listener);
+          // Timeout fallback
+          setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }, 3000);
         }
       });
     });
+    
+    // Capture with retry on readback failure and tab editing lock
+    let imageDataUrl = null;
+    let retries = 10; // Increased from 10 to handle "tab editing locked" state
+    while (retries > 0) {
+      try {
+        imageDataUrl = await new Promise((resolve, reject) => {
+          chrome.tabs.captureVisibleTab(targetTab.windowId, { format: 'png' }, dataUrl => {
+            if (chrome.runtime.lastError || !dataUrl) {
+              reject(new Error('captureVisibleTab error: ' + (chrome.runtime.lastError?.message || 'no data')));
+            } else {
+              resolve(dataUrl);
+            }
+          });
+        });
+        break; // Success, exit retry loop
+      } catch (e) {
+        retries--;
+        const errorMsg = e.message || '';
+        
+        // Check if error is "tab editing locked"
+        const isTabLocked = errorMsg.includes('user may be dragging') || 
+                           errorMsg.includes('cannot be edited') ||
+                           errorMsg.includes('Tabs cannot be edited');
+        
+        if (retries === 0) throw e;
+        
+        if (isTabLocked) {
+          // Wait longer for tab editing lock to release
+          const waitTime = 1000 + (5 - retries) * 500; // 1s, 1.5s, 2s, 2.5s, 3s
+          console.warn(`[CAPTURE] ⏸️ Tab editing locked, waiting ${waitTime}ms... (${retries} retries left)`);
+          await sleep(waitTime);
+        } else {
+          // Regular retry for other errors
+          console.warn(`[CAPTURE] ⚠️ Capture failed: ${errorMsg}, retrying... (${retries} left)`);
+          await sleep(500);
+        }
+      }
+    }
     
     // Restore original active tab
     if (originalActiveId && originalActiveId !== tabId) {
@@ -419,6 +526,18 @@ async function runJobForTab(tabId) {
       
       if (startDate && endDate) {
         console.log(`[JOB] 📅 Applying date range: ${startDate} to ${endDate}`);
+        
+        // IMPORTANT: Focus tab before applying date filter
+        // This ensures elements are rendered and interactive
+        try {
+          console.log(`[JOB] 🎯 Focusing tab ${tabId} for date filter interaction...`);
+          await safeFocusTab(tabId, 3);
+          await sleep(FOCUS_SWITCH_DELAY); // Wait for tab to fully activate
+          console.log(`[JOB] ✅ Tab ${tabId} is now active for date filter`);
+        } catch (e) {
+          console.warn('[JOB] Could not focus tab for date filter:', e.message);
+        }
+        
         try {
           await chrome.scripting.executeScript({
             target: { tabId },
@@ -441,6 +560,30 @@ async function runJobForTab(tabId) {
         console.log(`[JOB] ℹ️ No date range configured, skipping date filter`);
       }
       
+      // NEW STEP: Apply Lop (Layer) selection if enabled
+      const enableLop = tabConf.enableLop || false;
+      
+      if (enableLop) {
+        console.log(`[JOB] 🔄 Applying Lop (Layer) selection...`);
+        
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: applyLopFunction,
+            args: []
+          });
+          console.log(`[JOB] ✅ Lop selection applied successfully`);
+          
+          // Wait for changes to take effect
+          await sleep(2000);
+        } catch (err) {
+          console.warn('[JOB] ⚠️ Failed to apply Lop selection:', err.message);
+          // Continue anyway - don't fail the whole job
+        }
+      } else {
+        console.log(`[JOB] ℹ️ Lop selection not enabled, skipping`);
+      }
+      
       // NEW STEP: Download Google Sheet if fileName is configured
       const fileName = tabConf.fileName || null;
       let formattedFileName = null; // Will be used for Telegram caption
@@ -456,6 +599,21 @@ async function runJobForTab(tabId) {
         formattedFileName = `${fileName}_${day}-${month}-${year}_${hours}-${minutes}`;
         
         console.log(`[JOB] 📥 Downloading Google Sheet with name: "${formattedFileName}"`);
+        
+        // IMPORTANT: Focus tab before downloading (if not already focused from date filter)
+        if (!startDate || !endDate) {
+          try {
+            console.log(`[JOB] 🎯 Focusing tab ${tabId} for download interaction...`);
+            await safeFocusTab(tabId, 3);
+            await sleep(FOCUS_SWITCH_DELAY);
+            console.log(`[JOB] ✅ Tab ${tabId} is now active for download`);
+          } catch (e) {
+            console.warn('[JOB] Could not focus tab for download:', e.message);
+          }
+        } else {
+          console.log(`[JOB] ℹ️ Tab already focused from date filter step`);
+        }
+        
         try {
           await chrome.scripting.executeScript({
             target: { tabId },
@@ -479,9 +637,7 @@ async function runJobForTab(tabId) {
         // IMPORTANT: Focus tab ONLY before capture to avoid conflicts with other auto jobs
         console.log(`[JOB] 🎯 Focusing tab ${tabId} for screenshot capture...`);
         try {
-          const targetTab = await chrome.tabs.get(tabId);
-          await chrome.windows.update(targetTab.windowId, { focused: true });
-          await chrome.tabs.update(tabId, { active: true });
+          await safeFocusTab(tabId, 3);
           await sleep(FOCUS_SWITCH_DELAY); // Wait for tab to fully activate
           console.log(`[JOB] ✅ Tab ${tabId} is now active and ready for capture`);
         } catch (e) {
@@ -773,6 +929,103 @@ async function applyDateRangeFunction(startDateStr, endDateStr) {
   return true;
 }
 
+// ---- Apply Lop (Layer) Function - Select "Converted Currency" ----
+async function applyLopFunction() {
+  // Helper functions - must be self-contained
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  
+  async function waitForElement(selector, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(selector);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+      
+      const observer = new MutationObserver((mutations, obs) => {
+        const el = document.querySelector(selector);
+        if (el) {
+          obs.disconnect();
+          resolve(el);
+        }
+      });
+      
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+      
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`Element not found: ${selector}`));
+      }, timeout);
+    });
+  }
+  
+  console.log('[LOP] 🔄 Starting Lop (Layer) selection...');
+  
+  try {
+    // Step 1: Find and click "Lớp" button
+    const lopButton = document.querySelector('layers material-button.btn') ||
+                     document.querySelector('material-button[aria-label="Lớp"]') ||
+                     document.querySelector('material-button .icon[icon="layers"]')?.closest('material-button');
+    
+    if (!lopButton) {
+      throw new Error('Lop button not found');
+    }
+    
+    console.log('[LOP] 🖱️ Clicking "Lớp" button...');
+    lopButton.click();
+    await delay(800); // Wait for popup to appear
+    
+    // Step 2: Wait for popup to appear
+    const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
+    console.log('[LOP] ✅ Popup appeared');
+    
+    // Step 3: Find and click "Đơn vị tiền tệ đã chuyển đổi" checkbox
+    // Look for the material-select-item containing the text
+    const items = Array.from(document.querySelectorAll('material-select-item'));
+    const currencyItem = items.find(item => 
+      item.textContent.trim().includes('Đơn vị tiền tệ đã chuyển đổi')
+    );
+    
+    if (!currencyItem) {
+      throw new Error('Currency option not found');
+    }
+    
+    // Check if already selected
+    const checkbox = currencyItem.querySelector('material-checkbox');
+    const isChecked = checkbox?.getAttribute('aria-checked') === 'true';
+    
+    if (isChecked) {
+      console.log('[LOP] ℹ️ Currency option already selected, skipping...');
+    } else {
+      console.log('[LOP] ☑️ Selecting "Đơn vị tiền tệ đã chuyển đổi"...');
+      currencyItem.click();
+      await delay(500);
+    }
+    
+    // Step 4: Click "Áp dụng" button
+    const applyButton = popup.querySelector('material-button.button[raised]') ||
+                       popup.querySelector('.wrapper material-button');
+    
+    if (!applyButton) {
+      throw new Error('Apply button not found');
+    }
+    
+    console.log('[LOP] ✅ Clicking "Áp dụng" button...');
+    applyButton.click();
+    await delay(1000); // Wait for changes to apply
+    
+    console.log('[LOP] ✅ Lop selection completed successfully');
+    return true;
+    
+  } catch (error) {
+    console.error('[LOP] ❌ Error:', error.message);
+    throw error;
+  }
+}
+
 // ---- Download Google Sheet Function ----
 async function downloadGoogleSheetFunction(fileName = 'Report') {
   // Helper functions - must be self-contained
@@ -981,13 +1234,15 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     
     CAPTURE_REGIONS.set(tabId, { region, dpr });
     
-    // Save to storage
-    chrome.storage.local.get('tabSettings', (data) => {
+    // Save to storage with mutex lock to prevent race condition
+    safeStorageWrite(async () => {
+      const data = await chrome.storage.local.get('tabSettings');
       const tabSettings = data.tabSettings || {};
       if (!tabSettings[tabId]) tabSettings[tabId] = {};
       tabSettings[tabId].captureRegion = region;
       tabSettings[tabId].dpr = dpr;
-      chrome.storage.local.set({ tabSettings });
+      await chrome.storage.local.set({ tabSettings });
+      console.log(`[STORAGE] ✅ Saved region for tab ${tabId}`);
     });
     
     sendResponse({ status: 'saved' });
@@ -1000,12 +1255,15 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     
     CAPTURE_REGIONS.delete(tabId);
     
-    chrome.storage.local.get('tabSettings', (data) => {
+    // Clear from storage with mutex lock
+    safeStorageWrite(async () => {
+      const data = await chrome.storage.local.get('tabSettings');
       const tabSettings = data.tabSettings || {};
       if (tabSettings[tabId]) {
         delete tabSettings[tabId].captureRegion;
         delete tabSettings[tabId].dpr;
-        chrome.storage.local.set({ tabSettings });
+        await chrome.storage.local.set({ tabSettings });
+        console.log(`[STORAGE] ✅ Cleared region for tab ${tabId}`);
       }
     });
     

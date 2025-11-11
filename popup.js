@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const startDateInput = document.getElementById('startDate');
   const endDateInput = document.getElementById('endDate');
   const fileNameInput = document.getElementById('fileName');
+  const enableLopCheckbox = document.getElementById('enableLop');
 
   // Lấy tab hiện tại để biết ID
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -133,6 +134,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (tabSpecificSettings.fileName) {
               fileNameInput.value = tabSpecificSettings.fileName;
           }
+          if (tabSpecificSettings.enableLop !== undefined) {
+              enableLopCheckbox.checked = tabSpecificSettings.enableLop;
+          }
           
           // Hiển thị region nếu có
           updateRegionDisplay(tabSpecificSettings.captureRegion);
@@ -157,6 +161,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const startDate = startDateInput.value;
     const endDate = endDateInput.value;
     const fileName = fileNameInput.value.trim();
+    const enableLop = enableLopCheckbox.checked;
 
     if (!botToken) {
       showStatus('Vui lòng nhập Bot Token.', true);
@@ -182,6 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         tabSettings[activeTabId].startDate = startDate;
         tabSettings[activeTabId].endDate = endDate;
         tabSettings[activeTabId].fileName = fileName;
+        tabSettings[activeTabId].enableLop = enableLop;
 
         chrome.storage.local.set({ globalSettings, tabSettings }, () => {
           showStatus('Đã lưu thông tin!');
