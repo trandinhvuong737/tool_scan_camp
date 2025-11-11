@@ -981,6 +981,7 @@ async function applyLopFunction() {
     // Step 2: Wait for popup to appear
     const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
     console.log('[LOP] ✅ Popup appeared');
+    console.log('[LOP] 🔍 Popup structure:', popup.outerHTML.substring(0, 800));
     
     // Step 3: Find and click "Đơn vị tiền tệ đã chuyển đổi" checkbox
     // Look for the material-select-item containing the text
@@ -1005,15 +1006,47 @@ async function applyLopFunction() {
       await delay(500);
     }
     
-    // Step 4: Click "Áp dụng" button
-    const applyButton = popup.querySelector('material-button.button[raised]') ||
-                       popup.querySelector('.wrapper material-button');
+    // Step 4: Click "Áp dụng" button - improved selector with multiple fallbacks
+    console.log('[LOP] 🔍 Looking for "Áp dụng" button...');
+    
+    // Wait a bit for button to be ready
+    await delay(500);
+    
+    // Try multiple selectors for the apply button
+    let applyButton = null;
+    
+    // Method 1: Inside popup wrapper with raised attribute
+    applyButton = popup.querySelector('material-button.button[raised]');
+    
+    // Method 2: Inside wrapper div
+    if (!applyButton) {
+      applyButton = popup.querySelector('.wrapper material-button');
+    }
+    
+    // Method 3: Any material-button with "Áp dụng" text
+    if (!applyButton) {
+      const buttons = popup.querySelectorAll('material-button');
+      applyButton = Array.from(buttons).find(btn => 
+        btn.textContent.trim().includes('Áp dụng')
+      );
+    }
+    
+    // Method 4: Look for raised attribute anywhere in popup
+    if (!applyButton) {
+      applyButton = popup.querySelector('material-button[raised]');
+    }
+    
+    // Method 5: Any button in .wrapper or .footer
+    if (!applyButton) {
+      applyButton = popup.querySelector('.wrapper button, .footer button, .popup-footer button');
+    }
     
     if (!applyButton) {
+      console.error('[LOP] ❌ Apply button not found. Popup HTML:', popup.innerHTML.substring(0, 500));
       throw new Error('Apply button not found');
     }
     
-    console.log('[LOP] ✅ Clicking "Áp dụng" button...');
+    console.log('[LOP] ✅ Found "Áp dụng" button, clicking...');
     applyButton.click();
     await delay(1000); // Wait for changes to apply
     
