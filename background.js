@@ -413,21 +413,23 @@ async function sendToTelegram(botToken, chatId, imageDataUrl, excelBlob = null, 
       const photoForm = new FormData();
       photoForm.append('chat_id', chatId);
       const imgBlob = await (await fetch(imageDataUrl)).blob();
-      photoForm.append('photo', imgBlob, 'capture.png');
+      
+      // Use sendDocument instead of sendPhoto to preserve original quality
+      photoForm.append('document', imgBlob, 'capture.png');
       
       // Use custom caption if provided, otherwise use default timestamp
       const caption = customCaption || `Tự động gửi lúc ${new Date().toLocaleString('vi-VN')}`;
       photoForm.append('caption', caption);
 
-      // Only send photo (Excel sending disabled)
-      const photoResp = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, { method: 'POST', body: photoForm });
+      // Send as document to avoid Telegram compression
+      const photoResp = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, { method: 'POST', body: photoForm });
 
       if (!photoResp.ok) {
         const error = await photoResp.json();
-        throw new Error(`Telegram Photo Error: ${error.description || 'Unknown'}`);
+        throw new Error(`Telegram Document Error: ${error.description || 'Unknown'}`);
       }
 
-      console.log(`[TELEGRAM] ✅ Sent screenshot successfully`);
+      console.log(`[TELEGRAM] ✅ Sent screenshot as document (full quality)`);
       return; // Success
       
     } catch (err) {
