@@ -965,18 +965,25 @@ async function applyLopFunction() {
   console.log('[LOP] 🔄 Starting Lop (Layer) selection...');
   
   try {
-    // Step 1: Find and click "Lớp" button
-    const lopButton = document.querySelector('layers material-button.btn') ||
-                     document.querySelector('material-button[aria-label="Lớp"]') ||
-                     document.querySelector('material-button .icon[icon="layers"]')?.closest('material-button');
+    // Step 1: Wait for "Lớp" button to be ready (page must be loaded first)
+    console.log('[LOP] ⏳ Waiting for page to load and "Lớp" button to appear...');
+    
+    const lopButton = await waitForElement('layers material-button.btn', 10000)
+      .catch(() => document.querySelector('material-button[aria-label="Lớp"]'))
+      .catch(() => document.querySelector('material-button .icon[icon="layers"]')?.closest('material-button'));
     
     if (!lopButton) {
-      throw new Error('Lop button not found');
+      throw new Error('Lop button not found after waiting 10s');
     }
+    
+    console.log('[LOP] ✅ "Lớp" button found and ready');
+    
+    // Extra wait to ensure page is fully interactive
+    await delay(1000);
     
     console.log('[LOP] 🖱️ Clicking "Lớp" button...');
     lopButton.click();
-    await delay(800); // Wait for popup to appear
+    await delay(1200); // Increased wait for popup to appear (slow network)
     
     // Step 2: Wait for popup to appear
     const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
