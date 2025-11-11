@@ -981,7 +981,15 @@ async function applyLopFunction() {
     // Step 2: Wait for popup to appear
     const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
     console.log('[LOP] ✅ Popup appeared');
-    console.log('[LOP] 🔍 Popup structure:', popup.outerHTML.substring(0, 800));
+    
+    // Debug: Log full popup structure
+    console.log('[LOP] 🔍 Popup wrapper HTML (first 1500 chars):', popup.outerHTML.substring(0, 1500));
+    
+    // Also check what's inside
+    const popupContent = popup.querySelector('.main, .content, .material-popup-content');
+    if (popupContent) {
+      console.log('[LOP] 📋 Popup content HTML:', popupContent.innerHTML.substring(0, 800));
+    }
     
     // Step 3: Find and click "Đơn vị tiền tệ đã chuyển đổi" checkbox
     // Look for the material-select-item containing the text
@@ -1010,40 +1018,60 @@ async function applyLopFunction() {
     console.log('[LOP] 🔍 Looking for "Áp dụng" button...');
     
     // Wait a bit for button to be ready
-    await delay(500);
+    await delay(800);
     
     // Try multiple selectors for the apply button
     let applyButton = null;
     
-    // Method 1: Inside popup wrapper with raised attribute
-    applyButton = popup.querySelector('material-button.button[raised]');
+    // Method 1: Search in the ENTIRE popup wrapper (not just .popup)
+    applyButton = popup.querySelector('material-button[raised]');
+    console.log('[LOP] Method 1 (raised):', applyButton ? 'Found' : 'Not found');
     
-    // Method 2: Inside wrapper div
+    // Method 2: Look for any material-button in wrapper/main/footer
     if (!applyButton) {
-      applyButton = popup.querySelector('.wrapper material-button');
+      applyButton = popup.querySelector('.wrapper material-button, .main material-button, .popup-footer material-button');
+      console.log('[LOP] Method 2 (wrapper/main/footer):', applyButton ? 'Found' : 'Not found');
     }
     
-    // Method 3: Any material-button with "Áp dụng" text
+    // Method 3: Find by text content "Áp dụng"
     if (!applyButton) {
-      const buttons = popup.querySelectorAll('material-button');
-      applyButton = Array.from(buttons).find(btn => 
-        btn.textContent.trim().includes('Áp dụng')
-      );
+      const allButtons = popup.querySelectorAll('material-button, button');
+      console.log('[LOP] Found', allButtons.length, 'buttons in popup');
+      applyButton = Array.from(allButtons).find(btn => {
+        const text = btn.textContent.trim();
+        console.log('[LOP] Button text:', text);
+        return text === 'Áp dụng' || text.includes('Áp dụng');
+      });
+      console.log('[LOP] Method 3 (text search):', applyButton ? 'Found' : 'Not found');
     }
     
-    // Method 4: Look for raised attribute anywhere in popup
+    // Method 4: Look outside .popup, inside .popup-wrapper
     if (!applyButton) {
-      applyButton = popup.querySelector('material-button[raised]');
+      // The button might be a sibling of .popup, not inside it
+      const popupParent = popup.parentElement || document;
+      applyButton = popupParent.querySelector('.popup-wrapper material-button[raised]');
+      console.log('[LOP] Method 4 (parent search):', applyButton ? 'Found' : 'Not found');
     }
     
-    // Method 5: Any button in .wrapper or .footer
+    // Method 5: Search for button in notification-content or content-area
     if (!applyButton) {
-      applyButton = popup.querySelector('.wrapper button, .footer button, .popup-footer button');
+      applyButton = popup.querySelector('.notification-content material-button, .content-area material-button');
+      console.log('[LOP] Method 5 (notification-content):', applyButton ? 'Found' : 'Not found');
     }
     
     if (!applyButton) {
-      console.error('[LOP] ❌ Apply button not found. Popup HTML:', popup.innerHTML.substring(0, 500));
-      throw new Error('Apply button not found');
+      // Log all buttons we can find
+      const allButtons = popup.querySelectorAll('material-button, button, [role="button"]');
+      console.error('[LOP] ❌ Could not find apply button. All buttons found:', allButtons.length);
+      allButtons.forEach((btn, idx) => {
+        console.log(`[LOP] Button ${idx}:`, {
+          tag: btn.tagName,
+          class: btn.className,
+          text: btn.textContent.trim().substring(0, 50),
+          raised: btn.hasAttribute('raised')
+        });
+      });
+      throw new Error('Apply button not found after trying all methods');
     }
     
     console.log('[LOP] ✅ Found "Áp dụng" button, clicking...');
