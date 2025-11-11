@@ -982,14 +982,8 @@ async function applyLopFunction() {
     const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
     console.log('[LOP] ✅ Popup appeared');
     
-    // Debug: Log full popup structure
-    console.log('[LOP] 🔍 Popup wrapper HTML (first 1500 chars):', popup.outerHTML.substring(0, 1500));
-    
     // Also check what's inside
     const popupContent = popup.querySelector('.main, .content, .material-popup-content');
-    if (popupContent) {
-      console.log('[LOP] 📋 Popup content HTML:', popupContent.innerHTML.substring(0, 800));
-    }
     
     // Step 3: Find and click "Đơn vị tiền tệ đã chuyển đổi" checkbox
     // Look for the material-select-item containing the text
