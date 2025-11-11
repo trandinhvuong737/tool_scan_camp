@@ -208,7 +208,11 @@ async function focusAndCapture(tabId) {
     while (retries > 0) {
       try {
         imageDataUrl = await new Promise((resolve, reject) => {
-          chrome.tabs.captureVisibleTab(targetTab.windowId, { format: 'png' }, dataUrl => {
+          // Capture with highest quality settings
+          chrome.tabs.captureVisibleTab(targetTab.windowId, { 
+            format: 'png', // PNG for lossless quality
+            quality: 100   // Maximum quality (only affects JPEG, but set anyway)
+          }, dataUrl => {
             if (chrome.runtime.lastError || !dataUrl) {
               reject(new Error('captureVisibleTab error: ' + (chrome.runtime.lastError?.message || 'no data')));
             } else {
@@ -307,6 +311,10 @@ async function captureTab(tabId) {
     console.log(`[CAPTURE] ℹ️ No region set, using full screenshot`);
   }
   
+  // Upscale image 2x for higher quality
+  console.log(`[CAPTURE] 🚀 Upscaling image 2x for better quality...`);
+  imageDataUrl = await upscaleImage(imageDataUrl, 2);
+  
   return imageDataUrl;
 }
 
@@ -337,6 +345,45 @@ async function cropImage(imageDataUrl, region, dpr) {
   } catch (e) {
     console.error('[CROP] Failed to crop image:', e);
     return imageDataUrl; // Return original if crop fails
+  }
+}
+
+// ---- Upscale Image for Higher Quality ----
+async function upscaleImage(imageDataUrl, scale = 2) {
+  try {
+    const imgRes = await fetch(imageDataUrl);
+    const imgBlob = await imgRes.blob();
+    const bitmap = await createImageBitmap(imgBlob);
+    
+    const originalWidth = bitmap.width;
+    const originalHeight = bitmap.height;
+    const newWidth = originalWidth * scale;
+    const newHeight = originalHeight * scale;
+    
+    const canvas = new OffscreenCanvas(newWidth, newHeight);
+    const ctx = canvas.getContext('2d');
+    
+    // Use high-quality image smoothing
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // Draw upscaled image
+    ctx.drawImage(bitmap, 0, 0, newWidth, newHeight);
+    
+    const upscaledBlob = await canvas.convertToBlob({ 
+      type: 'image/png',
+      quality: 1.0 // Maximum quality
+    });
+    
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(upscaledBlob);
+    });
+  } catch (e) {
+    console.error('[UPSCALE] Failed to upscale image:', e);
+    return imageDataUrl; // Return original if upscale fails
   }
 }
 
