@@ -775,16 +775,20 @@ async function applyDateRangeFunction(startDateStr, endDateStr) {
       
       console.log(`[DATE] 📅 Setting date range: ${startDateStr} to ${endDateStr}`);
       
-      // Step 1.1: Find and click the dropdown button to open date picker popup
-      const dropdownBtn = document.querySelector('dropdown-button.menu-trigger.primary-range .button') ||
-                         document.querySelector('dropdown-button.primary-range .button') ||
-                         document.querySelector('.date-range .button');
+      // Step 1.1: Wait for page to load, then find and click the dropdown button
+      console.log('[DATE] ⏳ Waiting for date dropdown button to load...');
+      const dropdownBtn = await waitForElement('dropdown-button.menu-trigger.primary-range .button', 10000) ||
+                          await waitForElement('dropdown-button.primary-range .button', 5000) ||
+                          await waitForElement('.date-range .button', 5000);
       
-      if (!dropdownBtn) throw new Error('Dropdown button not found');
+      if (!dropdownBtn) throw new Error('Dropdown button not found after waiting');
+      
+      console.log('[DATE] ✅ Dropdown button found and ready');
+      await delay(2000); // Extra delay for Angular framework to initialize
       
       console.log('[DATE] 🔽 Clicking dropdown button to open date picker...');
       dropdownBtn.click();
-      await delay(500); // Wait for popup to open
+      await delay(800); // Wait for popup to open
       
       // Step 1.2: Wait for date inputs to appear in the popup
       const startInput = await waitForElement('material-input.start.date-input input', 3000);
@@ -978,12 +982,12 @@ async function applyLopFunction() {
     
     console.log('[LOP] ✅ "Lớp" button found and ready');
     
-    // Extra wait to ensure page is fully interactive
-    await delay(1000);
+    // Extra wait to ensure Angular framework is fully initialized
+    await delay(2000);
     
     console.log('[LOP] 🖱️ Clicking "Lớp" button...');
     lopButton.click();
-    await delay(1200); // Increased wait for popup to appear (slow network)
+    await delay(1500); // Increased wait for popup to appear and render
     
     // Step 2: Wait for popup to appear
     const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
