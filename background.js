@@ -311,9 +311,7 @@ async function captureTab(tabId) {
     console.log(`[CAPTURE] ℹ️ No region set, using full screenshot`);
   }
   
-  // Upscale image 2x for higher quality
-  console.log(`[CAPTURE] 🚀 Upscaling image 2x for better quality...`);
-  imageDataUrl = await upscaleImage(imageDataUrl, 2);
+  // Note: Upscale disabled - causes blurring. Original resolution gives sharper results.
   
   return imageDataUrl;
 }
@@ -332,6 +330,10 @@ async function cropImage(imageDataUrl, region, dpr) {
     
     const canvas = new OffscreenCanvas(clipW, clipH);
     const ctx = canvas.getContext('2d');
+    
+    // Disable smoothing to preserve sharp pixels (better for screenshots with text)
+    ctx.imageSmoothingEnabled = false;
+    
     ctx.drawImage(bitmap, clipX, clipY, clipW, clipH, 0, 0, clipW, clipH);
     
     const clippedBlob = await canvas.convertToBlob({ type: 'image/png' });
