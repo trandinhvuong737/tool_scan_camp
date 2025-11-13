@@ -542,8 +542,8 @@ async function runJobForTab(tabId) {
       
       // Reload tab (if needed) - can run in background
       if (shouldReload) {
-        console.log(`[JOB] 🔄 Reloading tab ${tabId} (in background)...`);
-        await chrome.tabs.reload(tabId, { bypassCache: attempt === 0 }); // Only bypass cache on first attempt
+        console.log(`[JOB] 🔄 Reloading tab ${tabId} (using cache for faster load)...`);
+        await chrome.tabs.reload(tabId, { bypassCache: false }); // Always use cache for faster load
       } else {
         console.log(`[JOB] ⏭️ Skipping reload on retry attempt ${attempt + 1}`);
       }
@@ -818,6 +818,31 @@ async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBo
     }
   }
   
+  // Step 0: Wait for Angular UI to be fully rendered and ready
+  console.log('[DATE] ⏳ Waiting for Angular UI to be fully rendered...');
+  try {
+    // Wait for the actual UI element (dropdown button) to appear
+    // This is more reliable than checking document.readyState for SPAs
+    const dropdownButton = await waitForElement(
+      'dropdown-button.menu-trigger.primary-range .button, dropdown-button.primary-range .button, .date-range .button',
+      20000 // Wait up to 20 seconds for UI to render
+    );
+    
+    if (dropdownButton) {
+      console.log('[DATE] ✅ UI fully rendered - dropdown button detected');
+      // Extra delay to ensure Angular framework is stable
+      await delay(2000);
+    } else {
+      console.log('[DATE] ⚠️ Dropdown button not found, but continuing with extra delay...');
+      await delay(3000);
+    }
+  } catch (e) {
+    console.warn('[DATE] ⚠️ UI check failed:', e.message);
+    // If element not found, still try with longer delay
+    console.log('[DATE] ⏳ Adding extra 5 second delay for slow loading...');
+    await delay(5000);
+  }
+  
   // Step 1: Click dropdown and fill date range (Start Date & End Date) - with retry
   try {
     await retry(async () => {
@@ -940,45 +965,19 @@ async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBo
     console.warn('[DATE] ⚠️ Failed waiting for progress:', e.message);
   }
   
-  // Step 3: Scroll to bottom to load all lazy-loaded rows - with retry (only if enabled)
+  // Step 3: Scroll to bottom of page (simple scroll to end)
   if (enableScrollToBottom) {
-    console.log('[DATE] 📜 Scroll to bottom is ENABLED, proceeding...');
+    console.log('[DATE] 📜 Scroll to bottom is ENABLED, scrolling to end of page...');
     try {
-      await retry(async () => {
-        const canvas = await waitForElement('.ess-table-canvas', 5000);
-        if (!canvas) throw new Error('Table canvas not found');
-        
-        // Scroll to table first
-        canvas.scrollIntoView({ behavior: 'auto', block: 'start' });
-        await delay(300);
-        
-        // Find the scrollable container (canvas itself or parent)
-        const scrollContainer = canvas.scrollHeight > canvas.clientHeight ? canvas : 
-                               (canvas.parentElement?.scrollHeight > canvas.parentElement?.clientHeight ? canvas.parentElement : null);
-        
-        if (scrollContainer) {
-          console.log('[DATE] 📜 Scrolling to bottom of table to load all rows...');
-          
-          // Scroll to bottom to trigger lazy loading
-          const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
-          scrollContainer.scrollTop = maxScrollTop;
-          await delay(800); // Wait for lazy load
-          
-          // Scroll down a bit more to ensure all loaded
-          scrollContainer.scrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
-          await delay(500);
-          
-          console.log(`[DATE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
-        } else {
-          // If no scrollable container, try window scroll
-          console.log('[DATE] 📜 Scrolling window to bottom of table...');
-          const tableBottom = canvas.getBoundingClientRect().bottom + window.pageYOffset;
-          window.scrollTo({ top: tableBottom, behavior: 'auto' });
-          await delay(800);
-          console.log('[DATE] ✅ Scrolled window to table bottom');
-        }
-        
-      }, 2, 800);
+      // Simple scroll to bottom of the entire page
+      window.scrollTo({
+        top: document.body.scrollHeight,
+        behavior: 'smooth'
+      });
+      
+      await delay(1000); // Wait for scroll and any lazy loading
+      
+      console.log(`[DATE] ✅ Scrolled to bottom of page (height: ${document.body.scrollHeight}px)`);
     } catch (e) {
       console.warn('[DATE] ⚠️ Failed to scroll:', e.message);
     }
