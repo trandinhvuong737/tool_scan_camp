@@ -574,9 +574,11 @@ async function runJobForTab(tabId) {
       // Inject date range and apply filters if configured
       const startDate = tabConf.startDate || null;
       const endDate = tabConf.endDate || null;
+      const enableScrollToBottom = tabConf.enableScrollToBottom || false;
       
       if (startDate && endDate) {
         console.log(`[JOB] 📅 Applying date range: ${startDate} to ${endDate}`);
+        console.log(`[JOB] 📜 Scroll to bottom enabled: ${enableScrollToBottom}`);
         
         // IMPORTANT: Focus tab before applying date filter
         // This ensures elements are rendered and interactive
@@ -593,7 +595,7 @@ async function runJobForTab(tabId) {
           await chrome.scripting.executeScript({
             target: { tabId },
             func: applyDateRangeFunction,
-            args: [startDate, endDate]
+            args: [startDate, endDate, enableScrollToBottom]
           });
           console.log(`[JOB] ✅ Date range applied successfully`);
           
@@ -760,7 +762,7 @@ async function runJobForTab(tabId) {
 
 // ---- Apply Date Range Function (injected into page) ----
 // This function is injected and runs IN THE PAGE CONTEXT
-async function applyDateRangeFunction(startDateStr, endDateStr) {
+async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBottom = false) {
   // Helper functions - must be self-contained
   const delay = ms => new Promise(r => setTimeout(r, ms));
   
@@ -938,45 +940,50 @@ async function applyDateRangeFunction(startDateStr, endDateStr) {
     console.warn('[DATE] ⚠️ Failed waiting for progress:', e.message);
   }
   
-  // Step 3: Scroll to bottom to load all lazy-loaded rows - with retry
-  try {
-    await retry(async () => {
-      const canvas = await waitForElement('.ess-table-canvas', 5000);
-      if (!canvas) throw new Error('Table canvas not found');
-      
-      // Scroll to table first
-      canvas.scrollIntoView({ behavior: 'auto', block: 'start' });
-      await delay(300);
-      
-      // Find the scrollable container (canvas itself or parent)
-      const scrollContainer = canvas.scrollHeight > canvas.clientHeight ? canvas : 
-                             (canvas.parentElement?.scrollHeight > canvas.parentElement?.clientHeight ? canvas.parentElement : null);
-      
-      if (scrollContainer) {
-        console.log('[DATE] 📜 Scrolling to bottom of table to load all rows...');
+  // Step 3: Scroll to bottom to load all lazy-loaded rows - with retry (only if enabled)
+  if (enableScrollToBottom) {
+    console.log('[DATE] 📜 Scroll to bottom is ENABLED, proceeding...');
+    try {
+      await retry(async () => {
+        const canvas = await waitForElement('.ess-table-canvas', 5000);
+        if (!canvas) throw new Error('Table canvas not found');
         
-        // Scroll to bottom to trigger lazy loading
-        const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
-        scrollContainer.scrollTop = maxScrollTop;
-        await delay(800); // Wait for lazy load
+        // Scroll to table first
+        canvas.scrollIntoView({ behavior: 'auto', block: 'start' });
+        await delay(300);
         
-        // Scroll down a bit more to ensure all loaded
-        scrollContainer.scrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
-        await delay(500);
+        // Find the scrollable container (canvas itself or parent)
+        const scrollContainer = canvas.scrollHeight > canvas.clientHeight ? canvas : 
+                               (canvas.parentElement?.scrollHeight > canvas.parentElement?.clientHeight ? canvas.parentElement : null);
         
-        console.log(`[DATE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
-      } else {
-        // If no scrollable container, try window scroll
-        console.log('[DATE] 📜 Scrolling window to bottom of table...');
-        const tableBottom = canvas.getBoundingClientRect().bottom + window.pageYOffset;
-        window.scrollTo({ top: tableBottom, behavior: 'auto' });
-        await delay(800);
-        console.log('[DATE] ✅ Scrolled window to table bottom');
-      }
-      
-    }, 2, 800);
-  } catch (e) {
-    console.warn('[DATE] ⚠️ Failed to scroll:', e.message);
+        if (scrollContainer) {
+          console.log('[DATE] 📜 Scrolling to bottom of table to load all rows...');
+          
+          // Scroll to bottom to trigger lazy loading
+          const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+          scrollContainer.scrollTop = maxScrollTop;
+          await delay(800); // Wait for lazy load
+          
+          // Scroll down a bit more to ensure all loaded
+          scrollContainer.scrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+          await delay(500);
+          
+          console.log(`[DATE] ✅ Scrolled to bottom (scrollTop: ${scrollContainer.scrollTop}, scrollHeight: ${scrollContainer.scrollHeight})`);
+        } else {
+          // If no scrollable container, try window scroll
+          console.log('[DATE] 📜 Scrolling window to bottom of table...');
+          const tableBottom = canvas.getBoundingClientRect().bottom + window.pageYOffset;
+          window.scrollTo({ top: tableBottom, behavior: 'auto' });
+          await delay(800);
+          console.log('[DATE] ✅ Scrolled window to table bottom');
+        }
+        
+      }, 2, 800);
+    } catch (e) {
+      console.warn('[DATE] ⚠️ Failed to scroll:', e.message);
+    }
+  } else {
+    console.log('[DATE] ℹ️ Scroll to bottom is DISABLED, skipping...');
   }
   
   // Done - data is now filtered by date range and all rows loaded
@@ -1070,69 +1077,116 @@ async function applyLopFunction() {
       await delay(500);
     }
     
-    // Step 4: Click "Áp dụng" button - improved selector with multiple fallbacks
+    // Step 4: Click "Áp dụng" button - based on actual HTML structure
     console.log('[LOP] 🔍 Looking for "Áp dụng" button...');
     
     // Wait a bit for button to be ready
-    await delay(800);
+    await delay(1000);
     
     // Try multiple selectors for the apply button
     let applyButton = null;
     
-    // Method 1: Search in the ENTIRE popup wrapper (not just .popup)
-    applyButton = popup.querySelector('material-button[raised]');
-    console.log('[LOP] Method 1 (raised):', applyButton ? 'Found' : 'Not found');
-    
-    // Method 2: Look for any material-button in wrapper/main/footer
-    if (!applyButton) {
-      applyButton = popup.querySelector('.wrapper material-button, .main material-button, .popup-footer material-button');
-      console.log('[LOP] Method 2 (wrapper/main/footer):', applyButton ? 'Found' : 'Not found');
+    // Method 1: MOST SPECIFIC - Search in .wrapper inside .main (based on actual HTML structure)
+    // <div class="main"><div class="wrapper"><material-button raised="">Áp dụng</material-button></div></div>
+    const mainDiv = popup.querySelector('.main');
+    if (mainDiv) {
+      const wrapper = mainDiv.querySelector('.wrapper');
+      if (wrapper) {
+        applyButton = wrapper.querySelector('material-button[raised]');
+        console.log('[LOP] Method 1 (.main .wrapper material-button[raised]):', applyButton ? 'Found ✅' : 'Not found');
+      }
     }
     
-    // Method 3: Find by text content "Áp dụng"
+    // Method 2: Direct selector for the specific structure
     if (!applyButton) {
-      const allButtons = popup.querySelectorAll('material-button, button');
-      console.log('[LOP] Found', allButtons.length, 'buttons in popup');
+      applyButton = popup.querySelector('.popup .main .wrapper material-button[raised]');
+      console.log('[LOP] Method 2 (.popup .main .wrapper):', applyButton ? 'Found ✅' : 'Not found');
+    }
+    
+    // Method 3: Search for ANY material-button with [raised] attribute in visible popup
+    if (!applyButton) {
+      applyButton = popup.querySelector('material-button[raised]');
+      console.log('[LOP] Method 3 (popup material-button[raised]):', applyButton ? 'Found ✅' : 'Not found');
+    }
+    
+    // Method 4: Search GLOBALLY for visible buttons with "Áp dụng" text
+    if (!applyButton) {
+      const allButtons = document.querySelectorAll('material-button, button');
+      console.log('[LOP] Method 4: Found', allButtons.length, 'total buttons, searching for "Áp dụng"...');
+      
       applyButton = Array.from(allButtons).find(btn => {
         const text = btn.textContent.trim();
-        console.log('[LOP] Button text:', text);
-        return text === 'Áp dụng' || text.includes('Áp dụng');
+        const isVisible = btn.offsetParent !== null;
+        if ((text === 'Áp dụng' || text.includes('Áp dụng')) && isVisible) {
+          console.log('[LOP] Found button with "Áp dụng" text ✅:', {
+            text,
+            class: btn.className,
+            parent: btn.parentElement?.className
+          });
+          return true;
+        }
+        return false;
       });
-      console.log('[LOP] Method 3 (text search):', applyButton ? 'Found' : 'Not found');
     }
     
-    // Method 4: Look outside .popup, inside .popup-wrapper
+    // Method 5: Search in .wrapper anywhere in document (global fallback)
     if (!applyButton) {
-      // The button might be a sibling of .popup, not inside it
-      const popupParent = popup.parentElement || document;
-      applyButton = popupParent.querySelector('.popup-wrapper material-button[raised]');
-      console.log('[LOP] Method 4 (parent search):', applyButton ? 'Found' : 'Not found');
+      const wrappers = document.querySelectorAll('.wrapper');
+      console.log('[LOP] Method 5: Found', wrappers.length, '.wrapper elements');
+      for (const wrapper of wrappers) {
+        const btn = wrapper.querySelector('material-button[raised]');
+        if (btn && btn.offsetParent !== null && btn.textContent.trim().includes('Áp dụng')) {
+          applyButton = btn;
+          console.log('[LOP] Found in .wrapper ✅');
+          break;
+        }
+      }
     }
     
-    // Method 5: Search for button in notification-content or content-area
     if (!applyButton) {
-      applyButton = popup.querySelector('.notification-content material-button, .content-area material-button');
-      console.log('[LOP] Method 5 (notification-content):', applyButton ? 'Found' : 'Not found');
-    }
-    
-    if (!applyButton) {
-      // Log all buttons we can find
-      const allButtons = popup.querySelectorAll('material-button, button, [role="button"]');
-      console.error('[LOP] ❌ Could not find apply button. All buttons found:', allButtons.length);
-      allButtons.forEach((btn, idx) => {
-        console.log(`[LOP] Button ${idx}:`, {
-          tag: btn.tagName,
-          class: btn.className,
-          text: btn.textContent.trim().substring(0, 50),
-          raised: btn.hasAttribute('raised')
-        });
+      // Final debug: Log all visible material-buttons
+      console.error('[LOP] ❌ Could not find apply button after 5 methods!');
+      const allMaterialButtons = document.querySelectorAll('material-button');
+      console.log('[LOP] Logging all', allMaterialButtons.length, 'material-buttons:');
+      Array.from(allMaterialButtons).forEach((btn, idx) => {
+        if (btn.offsetParent !== null) {
+          console.log(`[LOP] Button ${idx}:`, {
+            text: btn.textContent.trim().substring(0, 30),
+            class: btn.className,
+            raised: btn.hasAttribute('raised'),
+            parent: btn.parentElement?.className,
+            grandparent: btn.parentElement?.parentElement?.className
+          });
+        }
       });
       throw new Error('Apply button not found after trying all methods');
     }
     
-    console.log('[LOP] ✅ Found "Áp dụng" button, clicking...');
+    console.log('[LOP] ✅ Found "Áp dụng" button successfully!');
+    console.log('[LOP] Button details:', {
+      text: applyButton.textContent.trim(),
+      class: applyButton.className,
+      tag: applyButton.tagName,
+      parent: applyButton.parentElement?.className
+    });
+    
+    // Click with multiple methods for maximum compatibility
+    console.log('[LOP] 🖱️ Clicking button...');
+    
+    // Method 1: Native click
     applyButton.click();
-    await delay(1000); // Wait for changes to apply
+    await delay(100);
+    
+    // Method 2: Dispatch mouse events (simulates real user click)
+    applyButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await delay(50);
+    applyButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    await delay(50);
+    applyButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    
+    // Wait for changes to apply
+    await delay(1500);
+    console.log('[LOP] ✅ Button clicked successfully');
     
     console.log('[LOP] ✅ Lop selection completed successfully');
     return true;

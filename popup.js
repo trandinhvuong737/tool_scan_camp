@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const endDateInput = document.getElementById('endDate');
   const fileNameInput = document.getElementById('fileName');
   const enableLopCheckbox = document.getElementById('enableLop');
+  const enableScrollToBottomCheckbox = document.getElementById('enableScrollToBottom');
 
   // Lấy tab hiện tại để biết ID
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -137,6 +138,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (tabSpecificSettings.enableLop !== undefined) {
               enableLopCheckbox.checked = tabSpecificSettings.enableLop;
           }
+          if (tabSpecificSettings.enableScrollToBottom !== undefined) {
+              enableScrollToBottomCheckbox.checked = tabSpecificSettings.enableScrollToBottom;
+          }
           
           // Hiển thị region nếu có
           updateRegionDisplay(tabSpecificSettings.captureRegion);
@@ -162,6 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const endDate = endDateInput.value;
     const fileName = fileNameInput.value.trim();
     const enableLop = enableLopCheckbox.checked;
+    const enableScrollToBottom = enableScrollToBottomCheckbox.checked;
 
     if (!botToken) {
       showStatus('Vui lòng nhập Bot Token.', true);
@@ -188,6 +193,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         tabSettings[activeTabId].endDate = endDate;
         tabSettings[activeTabId].fileName = fileName;
         tabSettings[activeTabId].enableLop = enableLop;
+        tabSettings[activeTabId].enableScrollToBottom = enableScrollToBottom;
 
         chrome.storage.local.set({ globalSettings, tabSettings }, () => {
           showStatus('Đã lưu thông tin!');
