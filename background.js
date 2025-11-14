@@ -571,70 +571,53 @@ async function runJobForTab(tabId) {
         console.warn(`[JOB] ⚠️ Content script not responding (may still work):`, e.message);
       }
       
-      // Inject date range and apply filters if configured
+      // Execute automation steps (date range, lop, scroll)
       const startDate = tabConf.startDate || null;
       const endDate = tabConf.endDate || null;
+      const enableLop = tabConf.enableLop || false;
       const enableScrollToBottom = tabConf.enableScrollToBottom || false;
       
-      if (startDate && endDate) {
-        console.log(`[JOB] 📅 Applying date range: ${startDate} to ${endDate}`);
-        console.log(`[JOB] 📜 Scroll to bottom enabled: ${enableScrollToBottom}`);
+      // Only run automation if at least one feature is enabled
+      if (startDate && endDate || enableLop || enableScrollToBottom) {
+        console.log(`[JOB] 🚀 Running automation steps...`);
+        console.log(`[JOB] Config: date=${startDate && endDate ? 'Yes' : 'No'}, lop=${enableLop}, scroll=${enableScrollToBottom}`);
         
-        // IMPORTANT: Focus tab before applying date filter
+        // IMPORTANT: Focus tab before running automation
         // This ensures elements are rendered and interactive
         try {
-          console.log(`[JOB] 🎯 Focusing tab ${tabId} for date filter interaction...`);
+          console.log(`[JOB] 🎯 Focusing tab ${tabId} for automation...`);
           await safeFocusTab(tabId, 3);
           await sleep(FOCUS_SWITCH_DELAY); // Wait for tab to fully activate
-          console.log(`[JOB] ✅ Tab ${tabId} is now active for date filter`);
+          console.log(`[JOB] ✅ Tab ${tabId} is now active for automation`);
         } catch (e) {
-          console.warn('[JOB] Could not focus tab for date filter:', e.message);
+          console.warn('[JOB] Could not focus tab for automation:', e.message);
         }
         
         try {
           await chrome.scripting.executeScript({
             target: { tabId },
-            func: applyDateRangeFunction,
-            args: [startDate, endDate, enableScrollToBottom]
+            func: executeAutomationSteps,
+            args: [{
+              startDate: startDate,
+              endDate: endDate,
+              enableLop: enableLop,
+              enableScrollToBottom: enableScrollToBottom
+            }]
           });
-          console.log(`[JOB] ✅ Date range applied successfully`);
+          console.log(`[JOB] ✅ Automation steps executed successfully`);
           
-          // CRITICAL: Wait extra time for data to load after applying filter
+          // CRITICAL: Wait extra time for data to load
           // This is essential for slow networks
-          console.log(`[JOB] ⏳ Waiting for data to load after filter (5s)...`);
+          console.log(`[JOB] ⏳ Waiting for data to settle (5s)...`);
           await sleep(5000);
-          console.log(`[JOB] ✅ Data should be loaded now`);
+          console.log(`[JOB] ✅ Data should be ready now`);
         } catch (err) {
-          console.warn('[JOB] ⚠️ Failed to apply date range:', err.message);
-          // If filter fails, still wait a bit for page to settle
+          console.warn('[JOB] ⚠️ Failed to execute automation steps:', err.message);
+          // If automation fails, still wait a bit for page to settle
           await sleep(2000);
         }
       } else {
-        console.log(`[JOB] ℹ️ No date range configured, skipping date filter`);
-      }
-      
-      // NEW STEP: Apply Lop (Layer) selection if enabled
-      const enableLop = tabConf.enableLop || false;
-      
-      if (enableLop) {
-        console.log(`[JOB] 🔄 Applying Lop (Layer) selection...`);
-        
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            func: applyLopFunction,
-            args: []
-          });
-          console.log(`[JOB] ✅ Lop selection applied successfully`);
-          
-          // Wait for changes to take effect
-          await sleep(2000);
-        } catch (err) {
-          console.warn('[JOB] ⚠️ Failed to apply Lop selection:', err.message);
-          // Continue anyway - don't fail the whole job
-        }
-      } else {
-        console.log(`[JOB] ℹ️ Lop selection not enabled, skipping`);
+        console.log(`[JOB] ℹ️ No automation configured, skipping all steps`);
       }
       
       // NEW STEP: Download Google Sheet if fileName is configured
@@ -760,24 +743,15 @@ async function runJobForTab(tabId) {
   }
 }
 
-// ---- Apply Date Range Function (injected into page) ----
+// ---- Page Automation Steps (injected into page) ----
 // This function is injected and runs IN THE PAGE CONTEXT
-async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBottom = false) {
+
+// Main orchestrator function - define execution order here
+async function executeAutomationSteps(config) {
   // Helper functions - must be self-contained
   const delay = ms => new Promise(r => setTimeout(r, ms));
   
-  async function waitForSelector(selector, timeout = 10000) { // Increased from 5000 for slow networks
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      const el = document.querySelector(selector);
-      if (el) return el;
-      await delay(300); // Increased from 200
-    }
-    return null;
-  }
-  
-  // MutationObserver-based wait for element (handles dynamic content)
-  async function waitForElement(selector, timeout = 15000) { // Increased from 8000 for slow networks
+  async function waitForElement(selector, timeout = 15000) {
     return new Promise((resolve, reject) => {
       const existing = document.querySelector(selector);
       if (existing) {
@@ -805,7 +779,6 @@ async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBo
     });
   }
   
-  // Retry wrapper for operations
   async function retry(fn, retries = 3, delayMs = 1000) {
     for (let i = 0; i < retries; i++) {
       try {
@@ -818,175 +791,322 @@ async function applyDateRangeFunction(startDateStr, endDateStr, enableScrollToBo
     }
   }
   
-  // Step 0: Wait for Angular UI to be fully rendered and ready
-  console.log('[DATE] ⏳ Waiting for Angular UI to be fully rendered...');
-  try {
-    // Wait for the actual UI element (dropdown button) to appear
-    // This is more reliable than checking document.readyState for SPAs
-    const dropdownButton = await waitForElement(
-      'dropdown-button.menu-trigger.primary-range .button, dropdown-button.primary-range .button, .date-range .button',
-      20000 // Wait up to 20 seconds for UI to render
-    );
-    
-    if (dropdownButton) {
-      console.log('[DATE] ✅ UI fully rendered - dropdown button detected');
-      // Extra delay to ensure Angular framework is stable
-      await delay(2000);
-    } else {
-      console.log('[DATE] ⚠️ Dropdown button not found, but continuing with extra delay...');
-      await delay(3000);
-    }
-  } catch (e) {
-    console.warn('[DATE] ⚠️ UI check failed:', e.message);
-    // If element not found, still try with longer delay
-    console.log('[DATE] ⏳ Adding extra 5 second delay for slow loading...');
-    await delay(5000);
-  }
+  // ========== STEP FUNCTIONS ==========
   
-  // Step 1: Click dropdown and fill date range (Start Date & End Date) - with retry
-  try {
-    await retry(async () => {
-      if (!startDateStr || !endDateStr) {
-        console.warn('[DATE] ⚠️ No date range provided, skipping');
-        return;
-      }
-      
-      console.log(`[DATE] 📅 Setting date range: ${startDateStr} to ${endDateStr}`);
-      
-      // Step 1.1: Wait for page to load, then find and click the dropdown button
-      console.log('[DATE] ⏳ Waiting for date dropdown button to load...');
-      const dropdownBtn = await waitForElement('dropdown-button.menu-trigger.primary-range .button', 10000) ||
-                          await waitForElement('dropdown-button.primary-range .button', 5000) ||
-                          await waitForElement('.date-range .button', 5000);
-      
-      if (!dropdownBtn) throw new Error('Dropdown button not found after waiting');
-      
-      console.log('[DATE] ✅ Dropdown button found and ready');
-      await delay(2000); // Extra delay for Angular framework to initialize
-      
-      console.log('[DATE] 🔽 Clicking dropdown button to open date picker...');
-      dropdownBtn.click();
-      await delay(800); // Wait for popup to open
-      
-      // Step 1.2: Wait for date inputs to appear in the popup
-      const startInput = await waitForElement('material-input.start.date-input input', 3000);
-      if (!startInput) throw new Error('Start date input not found after opening dropdown');
-      
-      const endInput = document.querySelector('material-input.end.date-input input') ||
-                      document.querySelector('.end.date-input input');
-      if (!endInput) throw new Error('End date input not found');
-      
-      console.log('[DATE] ✅ Date picker popup opened, inputs found');
-      
-      // Helper to format date from yyyy-MM-dd to d/M/yyyy
-      const formatDate = (dateStr) => {
-        const [year, month, day] = dateStr.split('-');
-        return `${parseInt(day)}/${parseInt(month)}/${year}`;
-      };
-      
-      // Step 1.3: Fill start date
-      startInput.focus();
-      await delay(100);
-      startInput.value = formatDate(startDateStr);
-      startInput.dispatchEvent(new Event('input', { bubbles: true }));
-      startInput.dispatchEvent(new Event('change', { bubbles: true }));
-      startInput.blur();
-      await delay(300);
-      
-      console.log(`[DATE] ✅ Filled start date: ${formatDate(startDateStr)}`);
-      
-      // Step 1.4: Fill end date
-      endInput.focus();
-      await delay(100);
-      endInput.value = formatDate(endDateStr);
-      endInput.dispatchEvent(new Event('input', { bubbles: true }));
-      endInput.dispatchEvent(new Event('change', { bubbles: true }));
-      endInput.blur();
-      await delay(300);
-      
-      console.log(`[DATE] ✅ Filled end date: ${formatDate(endDateStr)}`);
-      
-      // Step 1.5: Wait for "Áp dụng" button to appear and click it
-      const applyBtn = await waitForElement('material-button.apply', 3000);
-      if (!applyBtn) throw new Error('Apply button not found');
-      
-      applyBtn.click();
-      await delay(600); // Wait for popup to close and data to load
-      console.log('[DATE] ✅ Clicked "Áp dụng" button');
-    }, 2, 800);
-  } catch (e) {
-    console.warn('[DATE] ⚠️ Failed to set date range:', e.message);
-  }
-  
-  // Step 2: Wait for progress indicator to show then hide (data loading) - with retry
-  try {
-    await retry(async () => {
-      const progSel = 'material-progress,[role="progressbar"]';
-      let seen = false;
-      let noProgressCounter = 0;
-      const t0 = Date.now();
-      
-      // Maximum 15s wait, but can exit early if no progress bar detected
-      while (Date.now() - t0 < 10000) {
-        const p = document.querySelector(progSel);
-        if (p) {
-          seen = true;
-          noProgressCounter = 0; // Reset counter when we see progress
-          await delay(200);
-          continue;
-        }
-        
-        // If progress was shown and now hidden, data is loaded
-        if (seen) {
-          console.log('[DATE] ✅ Data loaded (progress indicator hidden)');
-          await delay(500); // Brief wait to ensure data is rendered
-          return;
-        }
-        
-        // If we never see progress bar after 3 seconds, assume it's already loaded
-        noProgressCounter++;
-        if (noProgressCounter > 15) { // 15 × 200ms = 3 seconds
-          console.log('[DATE] ℹ️ No progress indicator found after 3s, assuming data ready');
-          return;
-        }
-        
-        await delay(200);
-      }
-      
-      // Timeout after 15s - but don't fail, just proceed
-      if (!seen) {
-        console.log('[DATE] ⚠️ Progress timeout, proceeding anyway...');
-        return;
-      }
-      
-      throw new Error('Data loading timeout after 15s');
-    }, 2, 1000);
-  } catch (e) {
-    console.warn('[DATE] ⚠️ Failed waiting for progress:', e.message);
-  }
-  
-  // Step 3: Scroll to bottom of page (simple scroll to end)
-  if (enableScrollToBottom) {
-    console.log('[DATE] 📜 Scroll to bottom is ENABLED, scrolling to end of page...');
+  // Step 0: Wait for page to be ready
+  async function stepWaitForPageReady() {
+    console.log('[STEP-0] ⏳ Waiting for Angular UI to be fully rendered...');
     try {
-      // Simple scroll to bottom of the entire page
-      window.scrollTo({
-        top: document.body.scrollHeight,
-        behavior: 'smooth'
-      });
+      const dropdownButton = await waitForElement(
+        'dropdown-button.menu-trigger.primary-range .button, dropdown-button.primary-range .button, .date-range .button',
+        20000
+      );
       
-      await delay(1000); // Wait for scroll and any lazy loading
-      
-      console.log(`[DATE] ✅ Scrolled to bottom of page (height: ${document.body.scrollHeight}px)`);
+      if (dropdownButton) {
+        console.log('[STEP-0] ✅ UI fully rendered - dropdown button detected');
+        await delay(2000);
+      } else {
+        console.log('[STEP-0] ⚠️ Dropdown button not found, but continuing with extra delay...');
+        await delay(3000);
+      }
     } catch (e) {
-      console.warn('[DATE] ⚠️ Failed to scroll:', e.message);
+      console.warn('[STEP-0] ⚠️ UI check failed:', e.message);
+      console.log('[STEP-0] ⏳ Adding extra 5 second delay for slow loading...');
+      await delay(5000);
     }
-  } else {
-    console.log('[DATE] ℹ️ Scroll to bottom is DISABLED, skipping...');
   }
   
-  // Done - data is now filtered by date range and all rows loaded
-  console.log('[DATE] ✅ Date range applied and all data loaded');
+  // Step 1: Apply date range filter
+  async function stepApplyDateRange(startDateStr, endDateStr) {
+    if (!startDateStr || !endDateStr) {
+      console.log('[STEP-1] ℹ️ No date range provided, skipping');
+      return;
+    }
+    
+    console.log('[STEP-1] 📅 Applying date range filter...');
+    
+    try {
+      await retry(async () => {
+        console.log(`[STEP-1] Setting date range: ${startDateStr} to ${endDateStr}`);
+        
+        // Find and click dropdown button
+        const dropdownBtn = await waitForElement('dropdown-button.menu-trigger.primary-range .button', 10000) ||
+                            await waitForElement('dropdown-button.primary-range .button', 5000) ||
+                            await waitForElement('.date-range .button', 5000);
+        
+        if (!dropdownBtn) throw new Error('Dropdown button not found');
+        
+        console.log('[STEP-1] ✅ Dropdown button found');
+        await delay(2000);
+        
+        dropdownBtn.click();
+        await delay(800);
+        
+        // Wait for date inputs
+        const startInput = await waitForElement('material-input.start.date-input input', 3000);
+        if (!startInput) throw new Error('Start date input not found');
+        
+        const endInput = document.querySelector('material-input.end.date-input input') ||
+                        document.querySelector('.end.date-input input');
+        if (!endInput) throw new Error('End date input not found');
+        
+        console.log('[STEP-1] ✅ Date picker opened');
+        
+        // Format date helper
+        const formatDate = (dateStr) => {
+          const [year, month, day] = dateStr.split('-');
+          return `${parseInt(day)}/${parseInt(month)}/${year}`;
+        };
+        
+        // Fill start date
+        startInput.focus();
+        await delay(100);
+        startInput.value = formatDate(startDateStr);
+        startInput.dispatchEvent(new Event('input', { bubbles: true }));
+        startInput.dispatchEvent(new Event('change', { bubbles: true }));
+        startInput.blur();
+        await delay(300);
+        
+        console.log(`[STEP-1] ✅ Filled start date: ${formatDate(startDateStr)}`);
+        
+        // Fill end date
+        endInput.focus();
+        await delay(100);
+        endInput.value = formatDate(endDateStr);
+        endInput.dispatchEvent(new Event('input', { bubbles: true }));
+        endInput.dispatchEvent(new Event('change', { bubbles: true }));
+        endInput.blur();
+        await delay(300);
+        
+        console.log(`[STEP-1] ✅ Filled end date: ${formatDate(endDateStr)}`);
+        
+        // Click apply button
+        const applyBtn = await waitForElement('material-button.apply', 3000);
+        if (!applyBtn) throw new Error('Apply button not found');
+        
+        applyBtn.click();
+        await delay(600);
+        console.log('[STEP-1] ✅ Clicked "Áp dụng" button');
+      }, 2, 800);
+    } catch (e) {
+      console.warn('[STEP-1] ⚠️ Failed to set date range:', e.message);
+    }
+  }
+  
+  // Step 2: Wait for data to load
+  async function stepWaitForDataLoad() {
+    console.log('[STEP-2] ⏳ Waiting for data to load...');
+    
+    try {
+      await retry(async () => {
+        const progSel = 'material-progress,[role="progressbar"]';
+        let seen = false;
+        let noProgressCounter = 0;
+        const t0 = Date.now();
+        
+        while (Date.now() - t0 < 10000) {
+          const p = document.querySelector(progSel);
+          if (p) {
+            seen = true;
+            noProgressCounter = 0;
+            await delay(200);
+            continue;
+          }
+          
+          if (seen) {
+            console.log('[STEP-2] ✅ Data loaded (progress indicator hidden)');
+            await delay(500);
+            return;
+          }
+          
+          noProgressCounter++;
+          if (noProgressCounter > 15) {
+            console.log('[STEP-2] ℹ️ No progress indicator found after 3s, assuming data ready');
+            return;
+          }
+          
+          await delay(200);
+        }
+        
+        if (!seen) {
+          console.log('[STEP-2] ⚠️ Progress timeout, proceeding anyway...');
+          return;
+        }
+        
+        throw new Error('Data loading timeout after 10s');
+      }, 2, 1000);
+    } catch (e) {
+      console.warn('[STEP-2] ⚠️ Failed waiting for progress:', e.message);
+    }
+  }
+  
+  // Step 3: Apply Lop (Layer) selection
+  async function stepApplyLop() {
+    console.log('[STEP-3] 🔄 Applying Lop (Layer) selection...');
+    
+    try {
+      // Wait for "Lớp" button
+      const lopButton = await waitForElement('layers material-button.btn', 10000)
+        .catch(() => document.querySelector('material-button[aria-label="Lớp"]'))
+        .catch(() => document.querySelector('material-button .icon[icon="layers"]')?.closest('material-button'));
+      
+      if (!lopButton) {
+        console.warn('[STEP-3] ⚠️ Lop button not found');
+        return;
+      }
+      
+      console.log('[STEP-3] ✅ "Lớp" button found');
+      await delay(2000);
+      
+      lopButton.click();
+      await delay(1500);
+      
+      // Wait for popup
+      const popup = await waitForElement('.popup-wrapper.visible[role="dialog"]', 5000);
+      console.log('[STEP-3] ✅ Popup appeared');
+      
+      // Find currency option
+      const items = Array.from(document.querySelectorAll('material-select-item'));
+      const currencyItem = items.find(item => 
+        item.textContent.trim().includes('Đơn vị tiền tệ đã chuyển đổi')
+      );
+      
+      if (!currencyItem) {
+        console.warn('[STEP-3] ⚠️ Currency option not found');
+        return;
+      }
+      
+      // Check if already selected
+      const checkbox = currencyItem.querySelector('material-checkbox');
+      const isChecked = checkbox?.getAttribute('aria-checked') === 'true';
+      
+      if (!isChecked) {
+        console.log('[STEP-3] ☑️ Selecting currency option...');
+        currencyItem.click();
+        await delay(500);
+      } else {
+        console.log('[STEP-3] ℹ️ Currency option already selected');
+      }
+      
+      // Find and click apply button
+      await delay(1000);
+      
+      const mainDiv = popup.querySelector('.main');
+      let applyButton = mainDiv?.querySelector('.wrapper material-button[raised]') ||
+                       popup.querySelector('material-button[raised]');
+      
+      if (!applyButton) {
+        const allButtons = document.querySelectorAll('material-button, button');
+        applyButton = Array.from(allButtons).find(btn => {
+          const text = btn.textContent.trim();
+          const isVisible = btn.offsetParent !== null;
+          return (text === 'Áp dụng' || text.includes('Áp dụng')) && isVisible;
+        });
+      }
+      
+      if (!applyButton) {
+        console.warn('[STEP-3] ⚠️ Apply button not found');
+        return;
+      }
+      
+      console.log('[STEP-3] 🖱️ Clicking apply button...');
+      applyButton.click();
+      await delay(100);
+      applyButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await delay(1500);
+      
+      console.log('[STEP-3] ✅ Lop selection completed');
+    } catch (e) {
+      console.warn('[STEP-3] ⚠️ Failed to apply Lop:', e.message);
+    }
+  }
+  
+  // Step 4: Scroll to bottom
+  async function stepScrollToBottom() {
+    console.log('[STEP-4] 📜 Scrolling to bottom...');
+    
+    try {
+      const contentContainer = document.querySelector('awsm-child-content') ||
+                              document.querySelector('.awsm-content') ||
+                              document.querySelector('.awsm-nav-bar-and-content');
+      
+      if (contentContainer) {
+        const scrollHeight = contentContainer.scrollHeight;
+        const clientHeight = contentContainer.clientHeight;
+        const scrollDistance = scrollHeight - clientHeight;
+        
+        console.log(`[STEP-4] 📊 Container: scrollHeight=${scrollHeight}, clientHeight=${clientHeight}, needScroll=${scrollDistance}px`);
+        
+        if (scrollDistance > 10) {
+          // Use larger deltaY and more events to ensure we reach the bottom
+          const deltaPerEvent = 500; // Increased from 200
+          const wheelCount = Math.ceil(scrollDistance / deltaPerEvent) + 10; // Add extra events to ensure reaching bottom
+          
+          console.log(`[STEP-4] 🎯 Dispatching ${wheelCount} wheel events (${deltaPerEvent}px each)...`);
+          
+          // Dispatch events in batches with small delays
+          for (let i = 0; i < wheelCount; i++) {
+            contentContainer.dispatchEvent(new WheelEvent('wheel', {
+              deltaY: deltaPerEvent,
+              bubbles: true,
+              cancelable: true
+            }));
+            
+            // Small delay every 5 events to allow scroll to process
+            if (i % 5 === 0 && i > 0) {
+              await delay(50);
+            }
+          }
+          
+          // Wait longer for scroll animation and lazy loading
+          await delay(3000);
+          
+          // Verify if we reached the bottom
+          const finalScrollTop = contentContainer.scrollTop;
+          const maxScroll = scrollHeight - clientHeight;
+          console.log(`[STEP-4] 📍 Final scroll position: ${finalScrollTop}/${maxScroll}px`);
+          
+          if (finalScrollTop >= maxScroll - 50) {
+            console.log(`[STEP-4] ✅ Reached bottom successfully`);
+          } else {
+            console.log(`[STEP-4] ⚠️ Partially scrolled (${Math.round(finalScrollTop / maxScroll * 100)}%)`);
+          }
+        } else {
+          console.log('[STEP-4] ℹ️ No scroll needed (content fits in view)');
+        }
+      } else {
+        console.warn('[STEP-4] ⚠️ Content container not found');
+      }
+    } catch (e) {
+      console.warn('[STEP-4] ⚠️ Failed to scroll:', e.message);
+    }
+  }
+  
+  // ========== EXECUTION ORDER ==========
+  // Define the sequence of steps here - easy to reorder!
+  
+  console.log('[AUTO] 🚀 Starting automation sequence...');
+  
+  // Always wait for page ready first
+  await stepWaitForPageReady();
+  
+  // Apply date range if configured
+  if (config.startDate && config.endDate) {
+    await stepApplyDateRange(config.startDate, config.endDate);
+    await stepWaitForDataLoad();
+  }
+  
+  // Apply Lop (Layer) selection if enabled
+  if (config.enableLop) {
+    await stepApplyLop();
+  }
+  
+  // Scroll to bottom if enabled (AFTER Lop)
+  if (config.enableScrollToBottom) {
+    await stepScrollToBottom();
+  }
+  
+  console.log('[AUTO] ✅ Automation sequence completed');
   return true;
 }
 
